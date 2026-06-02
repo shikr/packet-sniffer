@@ -14,9 +14,6 @@
 #include <string.h>
 #include <time.h>
 
-// gcc -Wall nsiff.c -o build/monitor -lraylib -lGL -lpthread -ldl -lrt -lX11
-// -lpcap
-
 #define INFO_BUFFER_SIZE 64
 #define PROTOCOL_BUFFER_SIZE 8
 #define RAW_BUFFER_SIZE 1024
