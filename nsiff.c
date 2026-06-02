@@ -1,3 +1,5 @@
+#include <arpa/inet.h>
+#include <ctype.h>
 #include <net/ethernet.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -10,49 +12,80 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // gcc -Wall nsiff.c -o build/monitor -lraylib -lGL -lpthread -ldl -lrt -lX11
 // -lpcap
 
-#define INFO_BUFFER_SIZE 22
-#define PROTOCOL_BUFFER_SIZE 6
+#define INFO_BUFFER_SIZE 64
+#define PROTOCOL_BUFFER_SIZE 8
+#define RAW_BUFFER_SIZE 1024
 
-#define MAX_PACKETS 10
+#define MAX_PACKETS 1024
 #define DEVICE "wlan0"
 
 #define WIN_WIDTH 1920
 #define WIN_HEIGHT 1080
 
 int link_hdr_length = 0;
+int packet_counter = 0;
+struct timeval first_ts;
+int have_first_ts = 0;
 
 float scroll_list = 0;
 float scroll_info = 0;
 float scroll_mem = 0;
 float scroll_hex = 0;
 
+int auto_scroll_list = 1;
+int selected_index = -1;
+char filter_buf[256] = "";
+int filter_active = 0;
+int capture_paused = 0;
+
 // ventanas
+Rectangle Btn_stop = {520, 42, 80, 28};
+Rectangle Btn_save = {612, 42, 110, 28};
+Rectangle Btn_live = {734, 42, 55, 28};
 Rectangle Packet_list = {10, 100, 1900, 500};
 Rectangle Packet_info = {10, 650, 570, 300};
 Rectangle packet_raw_mem = {600, 650, 700, 300};
 Rectangle packet_raw_hex = {1320, 650, 570, 300};
+Rectangle Filter_input = {100, 42, 400, 28};
+
+typedef struct packet_info packet_info;
 
 // funciones
 void DrawPanel(Rectangle r);
 void ClampScroll(float *scroll, int items, float itemHeight, float panelHeight);
 void draw_packet_list();
 void draw_simple_panel(Rectangle r, float scroll, const char *prefix);
+void draw_info_panel();
+void draw_mem_panel();
+void draw_hex_panel();
+void draw_filter_input();
+void draw_buttons();
 void draw_titles();
+void save_to_file();
+int filter_match(const packet_info *pkt);
+int count_filtered();
+void copy_lower(char *dst, const char *src, size_t dst_size);
+int contains_text(const char *text, const char *query);
 
-typedef struct {
+struct packet_info {
+  int no;
   int id;
+  float time;
   int len;
   char src_ip[INET_ADDRSTRLEN];
-  char dst_ip[INET6_ADDRSTRLEN];
+  char dst_ip[INET_ADDRSTRLEN];
   int ttl;
   int tos;
   char protocol[PROTOCOL_BUFFER_SIZE];
   char info[INFO_BUFFER_SIZE];
-} packet_info;
+  int raw_len;
+  u_char raw[RAW_BUFFER_SIZE];
+};
 
 typedef struct {
   packet_info packets[MAX_PACKETS];
@@ -64,8 +97,31 @@ packet_buffer pkt_buffer = {.count = 0};
 
 void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,
              const u_char *packetd_ptr) {
+  (void)user;
+
+  pthread_mutex_lock(&pkt_buffer.mutex);
+  if (capture_paused) {
+    pthread_mutex_unlock(&pkt_buffer.mutex);
+    return;
+  }
+  pthread_mutex_unlock(&pkt_buffer.mutex);
+
+  const u_char *pkt_start = packetd_ptr;
+  if (pkthdr->caplen < (unsigned int)(link_hdr_length + (int)sizeof(struct ip))) {
+    return;
+  }
+
   packet_info pkt_info;
-  struct ether_header *eth_hdr = (struct ether_header *)packetd_ptr;
+  memset(&pkt_info, 0, sizeof(pkt_info));
+
+  if (!have_first_ts) {
+    first_ts = pkthdr->ts;
+    have_first_ts = 1;
+  }
+
+  pkt_info.time = (pkthdr->ts.tv_sec - first_ts.tv_sec) +
+                  (pkthdr->ts.tv_usec - first_ts.tv_usec) / 1000000.0f;
+
   packetd_ptr += link_hdr_length;
   struct ip *ip_hdr = (struct ip *)packetd_ptr;
 
@@ -76,15 +132,19 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,
   pkt_info.tos = ip_hdr->ip_tos;
   pkt_info.len = ntohs(ip_hdr->ip_len);
 
-  int packet_hlen = ip_hdr->ip_hl;
+  int packet_hlen = ip_hdr->ip_hl * 4;
+  if (packet_hlen < 20 || pkthdr->caplen < (unsigned int)(link_hdr_length + packet_hlen)) {
+    return;
+  }
 
-  packetd_ptr += 4 * packet_hlen;
+  packetd_ptr += packet_hlen;
   int protocol_type = ip_hdr->ip_p;
+  unsigned int transport_len = pkthdr->caplen - link_hdr_length - packet_hlen;
 
   struct tcphdr *tcp_header;
   struct udphdr *udp_header;
   struct icmp *icmp_header;
-  // int src_port, dst_port;
+  int src_port, dst_port;
 
   // printf("************************************"
   //        "**************************************\n");
@@ -93,11 +153,17 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,
 
   switch (protocol_type) {
   case IPPROTO_TCP:
+    if (transport_len < sizeof(struct tcphdr)) {
+      strcpy(pkt_info.protocol, "TCP");
+      strcpy(pkt_info.info, "TRUNCATED");
+      break;
+    }
     tcp_header = (struct tcphdr *)packetd_ptr;
-    // src_port = tcp_header->th_sport;
-    // dst_port = tcp_header->th_dport;
+    src_port = ntohs(tcp_header->th_sport);
+    dst_port = ntohs(tcp_header->th_dport);
     strcpy(pkt_info.protocol, "TCP");
-    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "FLAGS: %c/%c/%c",
+    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "%d -> %d [%c%c%c]", src_port,
+             dst_port,
              (tcp_header->th_flags & TH_SYN ? 'S' : '-'),
              (tcp_header->th_flags & TH_ACK ? 'A' : '-'),
              (tcp_header->th_flags & TH_URG ? 'U' : '-'));
@@ -107,41 +173,57 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,
     //        (tcp_header->th_flags & TH_URG ? 'U' : '-'), src_port, dst_port);
     break;
   case IPPROTO_UDP:
+    if (transport_len < sizeof(struct udphdr)) {
+      strcpy(pkt_info.protocol, "UDP");
+      strcpy(pkt_info.info, "TRUNCATED");
+      break;
+    }
     udp_header = (struct udphdr *)packetd_ptr;
-    // src_port = udp_header->uh_sport;
-    // dst_port = udp_header->uh_dport;
+    src_port = ntohs(udp_header->uh_sport);
+    dst_port = ntohs(udp_header->uh_dport);
     strcpy(pkt_info.protocol, "UDP");
-    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "SPORT: %d | DPORT: %d",
-             udp_header->uh_sport, udp_header->uh_dport);
+    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "%d -> %d", src_port, dst_port);
     // printf("PROTO: UDP | SPORT: %d | DPORT: %d |\n", src_port, dst_port);
     break;
   case IPPROTO_ICMP:
+    if (transport_len < sizeof(struct icmp)) {
+      strcpy(pkt_info.protocol, "ICMP");
+      strcpy(pkt_info.info, "TRUNCATED");
+      break;
+    }
     icmp_header = (struct icmp *)packetd_ptr;
     // int icmp_type = icmp_header->icmp_type;
     // int icmp_type_code = icmp_header->icmp_code;
     strcpy(pkt_info.protocol, "ICMP");
-    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "TYPE: %d | CODE: %d",
+    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "type=%d code=%d",
              icmp_header->icmp_type, icmp_header->icmp_code);
     // printf("PROTO: ICMP | TYPE: %d | CODE: %d |\n", icmp_type,
     // icmp_type_code);
     break;
 
   default:
-    goto end;
+    strcpy(pkt_info.protocol, "OTHER");
+    strcpy(pkt_info.info, "");
+    break;
   }
+
+  pkt_info.raw_len = pkthdr->caplen;
+  if (pkt_info.raw_len > RAW_BUFFER_SIZE) {
+    pkt_info.raw_len = RAW_BUFFER_SIZE;
+  }
+  memcpy(pkt_info.raw, pkt_start, pkt_info.raw_len);
 
   pthread_mutex_lock(&pkt_buffer.mutex);
   if (pkt_buffer.count < MAX_PACKETS) {
+    pkt_info.no = ++packet_counter;
     pkt_buffer.packets[pkt_buffer.count++] = pkt_info;
   }
   pthread_mutex_unlock(&pkt_buffer.mutex);
-
-end:;
 }
 
 void *capture_thread(void *arg) {
   pcap_t *handle = (pcap_t *)arg;
-  pcap_loop(handle, MAX_PACKETS, call_me, NULL);
+  pcap_loop(handle, -1, call_me, NULL);
   return NULL;
 }
 
@@ -156,17 +238,23 @@ int main(int argc, char **argv) {
   }
 
   struct bpf_program bpf;
-  bpf_u_int32 netmask;
+  bpf_u_int32 netmask = 0;
+  bpf_u_int32 netp = 0;
 
   if (argc > 1) {
+    if (pcap_lookupnet(DEVICE, &netp, &netmask, error_buffer) == PCAP_ERROR) {
+      netmask = 0;
+    }
+
     if (pcap_compile(capdev, &bpf, argv[1], 0, netmask) == PCAP_ERROR) {
       printf("ERR: pcap_compile() %s", pcap_geterr(capdev));
       // exit(1);
-    }
-
-    if (pcap_setfilter(capdev, &bpf) == PCAP_ERROR) {
-      printf("ERR: pcap_setfilter() %s", pcap_geterr(capdev));
-      // exit(1);
+    } else {
+      if (pcap_setfilter(capdev, &bpf) == PCAP_ERROR) {
+        printf("ERR: pcap_setfilter() %s", pcap_geterr(capdev));
+        // exit(1);
+      }
+      pcap_freecode(&bpf);
     }
   }
 
@@ -190,12 +278,94 @@ int main(int argc, char **argv) {
   InitWindow(WIN_WIDTH, WIN_HEIGHT, "Packet Sniffer");
   SetTargetFPS(60);
 
+  int last_packet_count = 0;
+
   while (!WindowShouldClose()) {
     Vector2 mouse = GetMousePosition();
+
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+      if (CheckCollisionPointRec(mouse, Filter_input)) {
+        filter_active = 1;
+      } else if (!CheckCollisionPointRec(mouse, Packet_list) &&
+                 !CheckCollisionPointRec(mouse, Btn_stop) &&
+                 !CheckCollisionPointRec(mouse, Btn_save) &&
+                 !CheckCollisionPointRec(mouse, Btn_live)) {
+        filter_active = 0;
+      }
+
+      if (CheckCollisionPointRec(mouse, Btn_stop)) {
+        pthread_mutex_lock(&pkt_buffer.mutex);
+        capture_paused = !capture_paused;
+        pthread_mutex_unlock(&pkt_buffer.mutex);
+      }
+
+      if (CheckCollisionPointRec(mouse, Btn_save)) {
+        save_to_file();
+      }
+
+      if (CheckCollisionPointRec(mouse, Btn_live)) {
+        pthread_mutex_lock(&pkt_buffer.mutex);
+        int visible = count_filtered();
+        float max_scroll = visible * 30 - Packet_list.height;
+        scroll_list = (max_scroll > 0) ? -max_scroll : 0;
+        auto_scroll_list = 1;
+        pthread_mutex_unlock(&pkt_buffer.mutex);
+      }
+
+      if (CheckCollisionPointRec(mouse, Packet_list)) {
+        pthread_mutex_lock(&pkt_buffer.mutex);
+        int rel_y = mouse.y - Packet_list.y - 10 - scroll_list;
+        int idx = rel_y / 30;
+        int visible_row = 0;
+        selected_index = -1;
+
+        if (rel_y >= 0) {
+          for (int i = 0; i < pkt_buffer.count; i++) {
+            if (!filter_match(&pkt_buffer.packets[i])) {
+              continue;
+            }
+
+            if (visible_row == idx) {
+              selected_index = i;
+              break;
+            }
+            visible_row++;
+          }
+        }
+        pthread_mutex_unlock(&pkt_buffer.mutex);
+      }
+    }
+
+    if (filter_active) {
+      int ch = GetCharPressed();
+      while (ch > 0) {
+        int len = strlen(filter_buf);
+        if (len < (int)sizeof(filter_buf) - 1 && ch >= 32 && ch < 127) {
+          filter_buf[len] = (char)ch;
+          filter_buf[len + 1] = '\0';
+        }
+        ch = GetCharPressed();
+      }
+
+      if (IsKeyPressed(KEY_BACKSPACE) && strlen(filter_buf) > 0) {
+        filter_buf[strlen(filter_buf) - 1] = '\0';
+      }
+      if (IsKeyPressed(KEY_ESCAPE)) {
+        filter_buf[0] = '\0';
+        filter_active = 0;
+      }
+      if (IsKeyPressed(KEY_ENTER)) {
+        filter_active = 0;
+      }
+    }
+
     float wheel = GetMouseWheelMove() * 20;
 
     // scroll solo si el raton esta encima
     if (CheckCollisionPointRec(mouse, Packet_list)) {
+      if (wheel > 0) {
+        auto_scroll_list = 0;
+      }
       scroll_list += wheel;
     }
     if (CheckCollisionPointRec(mouse, Packet_info)) {
@@ -209,22 +379,48 @@ int main(int argc, char **argv) {
     }
 
     pthread_mutex_lock(&pkt_buffer.mutex);
+    int visible = count_filtered();
+
+    if (auto_scroll_list && pkt_buffer.count > last_packet_count) {
+      float max_scroll = visible * 30 - Packet_list.height;
+      scroll_list = (max_scroll > 0) ? -max_scroll : 0;
+    }
+    last_packet_count = pkt_buffer.count;
+
+    int raw_lines = 1;
+    if (selected_index >= 0 && selected_index < pkt_buffer.count) {
+      raw_lines = (pkt_buffer.packets[selected_index].raw_len + 15) / 16;
+      if (raw_lines < 1) {
+        raw_lines = 1;
+      }
+    }
+
     // limitar el scroll
-    ClampScroll(&scroll_list, pkt_buffer.count, 30, Packet_list.height);
+    ClampScroll(&scroll_list, visible, 30, Packet_list.height);
     ClampScroll(&scroll_info, 20, 25, Packet_info.height);
-    ClampScroll(&scroll_mem, 20, 25, packet_raw_mem.height);
-    ClampScroll(&scroll_hex, 20, 25, packet_raw_hex.height);
+    ClampScroll(&scroll_mem, raw_lines, 16, packet_raw_mem.height);
+    ClampScroll(&scroll_hex, raw_lines, 16, packet_raw_hex.height);
+
+    float max_scroll = visible * 30 - Packet_list.height;
+    if (max_scroll < 0) {
+      max_scroll = 0;
+    }
+    if (scroll_list <= -max_scroll + 5) {
+      auto_scroll_list = 1;
+    }
 
     // dibujar ventanitas
     BeginDrawing();
     ClearBackground(BLACK);
 
+    draw_filter_input();
+    draw_buttons();
     draw_titles();
 
     draw_packet_list();
-    draw_simple_panel(Packet_info, scroll_info, "-INFO");
-    draw_simple_panel(packet_raw_mem, scroll_mem, "-MEM");
-    draw_simple_panel(packet_raw_hex, scroll_hex, "-HEX");
+    draw_info_panel();
+    draw_mem_panel();
+    draw_hex_panel();
 
     pthread_mutex_unlock(&pkt_buffer.mutex);
 
@@ -235,6 +431,7 @@ int main(int argc, char **argv) {
   pthread_join(thread_id, NULL);
   pcap_close(capdev);
   pthread_mutex_destroy(&pkt_buffer.mutex);
+  CloseWindow();
 
   return 0;
 }
@@ -261,16 +458,154 @@ void draw_packet_list() {
                    Packet_list.height);
 
   float itemHeight = 30;
+  int col_x[] = {20, 80, 295, 570, 845, 1120, 1395};
 
-  for (size_t i = 0; i < pkt_buffer.count; i++) {
+  int visible_row = 0;
+  for (int i = 0; i < pkt_buffer.count; i++) {
+    if (!filter_match(&pkt_buffer.packets[i])) {
+      continue;
+    }
+
+    int y = Packet_list.y + 10 + visible_row * itemHeight + scroll_list;
+    visible_row++;
+
+    Color color = (i == selected_index) ? YELLOW : GREEN;
+    char buffer[128];
+
+    snprintf(buffer, sizeof(buffer), "%d", pkt_buffer.packets[i].no);
+    DrawText(buffer, col_x[0], y, 18, color);
+
+    snprintf(buffer, sizeof(buffer), "%.2f", pkt_buffer.packets[i].time);
+    DrawText(buffer, col_x[1], y, 18, color);
+
+    DrawText(pkt_buffer.packets[i].src_ip, col_x[2], y, 18, color);
+    DrawText(pkt_buffer.packets[i].dst_ip, col_x[3], y, 18, color);
+    DrawText(pkt_buffer.packets[i].protocol, col_x[4], y, 18, color);
+
+    snprintf(buffer, sizeof(buffer), "%d", pkt_buffer.packets[i].len);
+    DrawText(buffer, col_x[5], y, 18, color);
+
+    DrawText(pkt_buffer.packets[i].info, col_x[6], y, 18, color);
+  }
+
+  EndScissorMode();
+}
+
+void draw_info_panel() {
+  DrawPanel(Packet_info);
+  BeginScissorMode(Packet_info.x, Packet_info.y, Packet_info.width,
+                   Packet_info.height);
+
+  if (selected_index >= 0 && selected_index < pkt_buffer.count) {
+    packet_info *pkt = &pkt_buffer.packets[selected_index];
     char buffer[256];
-    snprintf(buffer, sizeof(buffer), "%d   %s   %s   %s   %d   %s",
-             pkt_buffer.packets[i].id, pkt_buffer.packets[i].src_ip,
-             pkt_buffer.packets[i].dst_ip, pkt_buffer.packets[i].protocol,
-             pkt_buffer.packets[i].len, pkt_buffer.packets[i].info);
+    int x = Packet_info.x + 10;
+    int y = Packet_info.y + 10 + scroll_info;
 
-    DrawText(buffer, Packet_list.x + 10,
-             Packet_list.y + 10 + i * itemHeight + scroll_list, 18, GREEN);
+    snprintf(buffer, sizeof(buffer), "Packet #%d", pkt->no);
+    DrawText(buffer, x, y, 18, GREEN);
+    y += 24;
+    snprintf(buffer, sizeof(buffer), "IP ID:   %d", pkt->id);
+    DrawText(buffer, x, y, 18, GREEN);
+    y += 24;
+    snprintf(buffer, sizeof(buffer), "Time:    %.2fs", pkt->time);
+    DrawText(buffer, x, y, 18, GREEN);
+    y += 24;
+    snprintf(buffer, sizeof(buffer), "Source:  %s", pkt->src_ip);
+    DrawText(buffer, x, y, 18, GREEN);
+    y += 24;
+    snprintf(buffer, sizeof(buffer), "Dest:    %s", pkt->dst_ip);
+    DrawText(buffer, x, y, 18, GREEN);
+    y += 24;
+    snprintf(buffer, sizeof(buffer), "Proto:   %s", pkt->protocol);
+    DrawText(buffer, x, y, 18, GREEN);
+    y += 24;
+    snprintf(buffer, sizeof(buffer), "Length:  %d bytes", pkt->len);
+    DrawText(buffer, x, y, 18, GREEN);
+    y += 24;
+    snprintf(buffer, sizeof(buffer), "TTL/TOS: %d / 0x%x", pkt->ttl, pkt->tos);
+    DrawText(buffer, x, y, 18, GREEN);
+    y += 24;
+    snprintf(buffer, sizeof(buffer), "Info:    %s", pkt->info);
+    DrawText(buffer, x, y, 18, GREEN);
+    y += 24;
+    snprintf(buffer, sizeof(buffer), "Raw:     %d bytes", pkt->raw_len);
+    DrawText(buffer, x, y, 18, GREEN);
+  } else {
+    DrawText("Click a packet to view info", Packet_info.x + 10,
+             Packet_info.y + 10 + scroll_info, 18, WHITE);
+  }
+
+  EndScissorMode();
+}
+
+void draw_mem_panel() {
+  DrawPanel(packet_raw_mem);
+  BeginScissorMode(packet_raw_mem.x, packet_raw_mem.y, packet_raw_mem.width,
+                   packet_raw_mem.height);
+
+  if (selected_index >= 0 && selected_index < pkt_buffer.count) {
+    packet_info *pkt = &pkt_buffer.packets[selected_index];
+    int y = packet_raw_mem.y + 10 + scroll_mem;
+    char line[160];
+
+    for (int offset = 0; offset < pkt->raw_len; offset += 16) {
+      int pos = snprintf(line, sizeof(line), "%04x  ", offset);
+
+      for (int j = 0; j < 16; j++) {
+        if (offset + j < pkt->raw_len) {
+          pos += snprintf(line + pos, sizeof(line) - pos, "%02x ",
+                          pkt->raw[offset + j]);
+        } else {
+          pos += snprintf(line + pos, sizeof(line) - pos, "   ");
+        }
+        if (j == 7) {
+          pos += snprintf(line + pos, sizeof(line) - pos, " ");
+        }
+      }
+
+      pos += snprintf(line + pos, sizeof(line) - pos, " |");
+      for (int j = 0; j < 16 && offset + j < pkt->raw_len; j++) {
+        u_char c = pkt->raw[offset + j];
+        pos += snprintf(line + pos, sizeof(line) - pos, "%c",
+                        (c >= 32 && c < 127) ? c : '.');
+      }
+      snprintf(line + pos, sizeof(line) - pos, "|");
+
+      DrawText(line, packet_raw_mem.x + 10, y, 14, WHITE);
+      y += 16;
+    }
+  } else {
+    DrawText("Click a packet to view memory", packet_raw_mem.x + 10,
+             packet_raw_mem.y + 10 + scroll_mem, 18, WHITE);
+  }
+
+  EndScissorMode();
+}
+
+void draw_hex_panel() {
+  DrawPanel(packet_raw_hex);
+  BeginScissorMode(packet_raw_hex.x, packet_raw_hex.y, packet_raw_hex.width,
+                   packet_raw_hex.height);
+
+  if (selected_index >= 0 && selected_index < pkt_buffer.count) {
+    packet_info *pkt = &pkt_buffer.packets[selected_index];
+    int y = packet_raw_hex.y + 10 + scroll_hex;
+    char line[128];
+
+    for (int offset = 0; offset < pkt->raw_len; offset += 16) {
+      int pos = 0;
+      for (int j = 0; j < 16 && offset + j < pkt->raw_len; j++) {
+        pos += snprintf(line + pos, sizeof(line) - pos, "%02x ",
+                        pkt->raw[offset + j]);
+      }
+
+      DrawText(line, packet_raw_hex.x + 10, y, 14, WHITE);
+      y += 16;
+    }
+  } else {
+    DrawText("Click a packet to view hex", packet_raw_hex.x + 10,
+             packet_raw_hex.y + 10 + scroll_hex, 18, GREEN);
   }
 
   EndScissorMode();
@@ -290,13 +625,145 @@ void draw_simple_panel(Rectangle r, float scroll, const char *prefix) {
   EndScissorMode();
 }
 
-void draw_titles() {
-  const char *titles[] = {"No",       "SOURCE", "DESTINATION",
-                          "PROTOCOL", "LENGTH", "INFO"};
+void save_to_file() {
+  time_t now = time(NULL);
+  struct tm tm_info;
+  localtime_r(&now, &tm_info);
 
-  int x = 20;
-  for (int i = 0; i < 6; i++) {
-    DrawText(titles[i], x, 80, 20, GREEN);
-    x += 275;
+  char fname[256];
+  snprintf(fname, sizeof(fname), "sniff_%04d%02d%02d_%02d%02d%02d.txt",
+           tm_info.tm_year + 1900, tm_info.tm_mon + 1, tm_info.tm_mday,
+           tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec);
+
+  FILE *file = fopen(fname, "w");
+  if (file == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&pkt_buffer.mutex);
+  int saved_count = pkt_buffer.count;
+  fprintf(file, "Packet Sniffer session - %04d-%02d-%02d %02d:%02d:%02d\n",
+          tm_info.tm_year + 1900, tm_info.tm_mon + 1, tm_info.tm_mday,
+          tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec);
+  fprintf(file, "Total packets: %d\n\n", saved_count);
+
+  for (int i = 0; i < saved_count; i++) {
+    packet_info *pkt = &pkt_buffer.packets[i];
+    fprintf(file, "%d  %.2f  %s  %s  %s  %d", pkt->no, pkt->time,
+            pkt->src_ip, pkt->dst_ip, pkt->protocol, pkt->len);
+    if (pkt->info[0] != '\0') {
+      fprintf(file, "  %s", pkt->info);
+    }
+    fprintf(file, "\n");
+  }
+  pthread_mutex_unlock(&pkt_buffer.mutex);
+
+  fclose(file);
+  TraceLog(LOG_INFO, "Saved %d packets to %s", saved_count, fname);
+}
+
+void draw_buttons() {
+  Color stop_color = capture_paused ? (Color){0, 180, 0, 255} : RED;
+  const char *stop_text = capture_paused ? "RESUME" : "STOP";
+
+  DrawRectangleRec(Btn_stop, (Color){20, 20, 20, 255});
+  DrawRectangleLinesEx(Btn_stop, 1, stop_color);
+  DrawText(stop_text, Btn_stop.x + 8, Btn_stop.y + 5, 18, stop_color);
+
+  DrawRectangleRec(Btn_save, (Color){20, 20, 20, 255});
+  DrawRectangleLinesEx(Btn_save, 1, DARKGREEN);
+  DrawText("GUARDAR", Btn_save.x + 10, Btn_save.y + 5, 18, GREEN);
+
+  DrawRectangleRec(Btn_live, (Color){20, 20, 20, 255});
+  DrawRectangleLinesEx(Btn_live, 1, GREEN);
+  DrawText("LIVE", Btn_live.x + 8, Btn_live.y + 5, 18, GREEN);
+
+  char count_text[64];
+  snprintf(count_text, sizeof(count_text), "Packets: %d", pkt_buffer.count);
+  DrawText(count_text, 805, 48, 18, GREEN);
+}
+
+void draw_filter_input() {
+  DrawText("Filter:", 20, 50, 20, GREEN);
+  DrawRectangleLinesEx(Filter_input, 1, GREEN);
+  DrawText(filter_buf, Filter_input.x + 5, Filter_input.y + 5, 20, GREEN);
+
+  if (filter_active) {
+    int text_width = MeasureText(filter_buf, 20);
+    float t = GetTime();
+    if (((int)(t * 2)) % 2 == 0) {
+      DrawText("_", Filter_input.x + 5 + text_width, Filter_input.y + 5, 20,
+               GREEN);
+    }
+  } else if (filter_buf[0] == '\0') {
+    DrawText("filtrar...", Filter_input.x + 5, Filter_input.y + 5, 20,
+             DARKGREEN);
+  }
+
+  DrawText("src:x  dst:x  tcp/udp/icmp", Filter_input.x + 5,
+           Filter_input.y + 28, 14, DARKGREEN);
+}
+
+void copy_lower(char *dst, const char *src, size_t dst_size) {
+  if (dst_size == 0) {
+    return;
+  }
+
+  size_t i = 0;
+  for (; i + 1 < dst_size && src[i] != '\0'; i++) {
+    dst[i] = (char)tolower((unsigned char)src[i]);
+  }
+  dst[i] = '\0';
+}
+
+int contains_text(const char *text, const char *query) {
+  char lower_text[256];
+  char lower_query[256];
+
+  copy_lower(lower_text, text, sizeof(lower_text));
+  copy_lower(lower_query, query, sizeof(lower_query));
+
+  return strstr(lower_text, lower_query) != NULL;
+}
+
+int filter_match(const packet_info *pkt) {
+  char filter[256];
+
+  if (filter_buf[0] == '\0') {
+    return 1;
+  }
+
+  copy_lower(filter, filter_buf, sizeof(filter));
+
+  if (strncmp(filter, "src:", 4) == 0) {
+    return contains_text(pkt->src_ip, filter + 4);
+  }
+  if (strncmp(filter, "dst:", 4) == 0) {
+    return contains_text(pkt->dst_ip, filter + 4);
+  }
+
+  return contains_text(pkt->src_ip, filter) || contains_text(pkt->dst_ip, filter) ||
+         contains_text(pkt->protocol, filter);
+}
+
+int count_filtered() {
+  int count = 0;
+
+  for (int i = 0; i < pkt_buffer.count; i++) {
+    if (filter_match(&pkt_buffer.packets[i])) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
+void draw_titles() {
+  const char *titles[] = {"No",       "TIME",   "SOURCE", "DESTINATION",
+                          "PROTOCOL", "LENGTH", "INFO"};
+  int col_x[] = {20, 80, 295, 570, 845, 1120, 1395};
+
+  for (int i = 0; i < 7; i++) {
+    DrawText(titles[i], col_x[i], 80, 20, GREEN);
   }
 }
