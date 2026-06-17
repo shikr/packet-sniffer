@@ -56,12 +56,13 @@ typedef struct packet_info packet_info;
 void DrawPanel(Rectangle r);
 void ClampScroll(float *scroll, int items, float itemHeight, float panelHeight);
 void draw_packet_list();
-void draw_simple_panel(Rectangle r, float scroll, const char *prefix);
 void draw_info_panel();
 void draw_mem_panel();
 void draw_hex_panel();
 void draw_filter_input();
 void draw_buttons();
+void draw_button(Rectangle button, const char *text, Color border_color,
+                 Color text_color, int text_x_offset);
 void draw_titles();
 void save_to_file();
 int filter_match(const packet_info *pkt);
@@ -608,20 +609,6 @@ void draw_hex_panel() {
   EndScissorMode();
 }
 
-void draw_simple_panel(Rectangle r, float scroll, const char *prefix) {
-  DrawPanel(r);
-  BeginScissorMode(r.x, r.y, r.width, r.height);
-
-  for (int i = 0; i < 20; i++) {
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "%s %d", prefix, i);
-
-    DrawText(buffer, r.x + 10, r.y + 10 + i * 25 + scroll, 18, GREEN);
-  }
-
-  EndScissorMode();
-}
-
 void save_to_file() {
   time_t now = time(NULL);
   struct tm tm_info;
@@ -659,21 +646,20 @@ void save_to_file() {
   TraceLog(LOG_INFO, "Saved %d packets to %s", saved_count, fname);
 }
 
+void draw_button(Rectangle button, const char *text, Color border_color,
+                 Color text_color, int text_x_offset) {
+  DrawRectangleRec(button, (Color){20, 20, 20, 255});
+  DrawRectangleLinesEx(button, 1, border_color);
+  DrawText(text, button.x + text_x_offset, button.y + 5, 18, text_color);
+}
+
 void draw_buttons() {
   Color stop_color = capture_paused ? (Color){0, 180, 0, 255} : RED;
   const char *stop_text = capture_paused ? "RESUME" : "STOP";
 
-  DrawRectangleRec(Btn_stop, (Color){20, 20, 20, 255});
-  DrawRectangleLinesEx(Btn_stop, 1, stop_color);
-  DrawText(stop_text, Btn_stop.x + 8, Btn_stop.y + 5, 18, stop_color);
-
-  DrawRectangleRec(Btn_save, (Color){20, 20, 20, 255});
-  DrawRectangleLinesEx(Btn_save, 1, DARKGREEN);
-  DrawText("GUARDAR", Btn_save.x + 10, Btn_save.y + 5, 18, GREEN);
-
-  DrawRectangleRec(Btn_live, (Color){20, 20, 20, 255});
-  DrawRectangleLinesEx(Btn_live, 1, GREEN);
-  DrawText("LIVE", Btn_live.x + 8, Btn_live.y + 5, 18, GREEN);
+  draw_button(Btn_stop, stop_text, stop_color, stop_color, 8);
+  draw_button(Btn_save, "GUARDAR", DARKGREEN, GREEN, 10);
+  draw_button(Btn_live, "LIVE", GREEN, GREEN, 8);
 
   char count_text[64];
   snprintf(count_text, sizeof(count_text), "Packets: %d", pkt_buffer.count);
