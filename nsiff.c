@@ -19,7 +19,7 @@
 #define RAW_BUFFER_SIZE 1024
 
 #define MAX_PACKETS 1024
-#define DEVICE "wlan0"
+#define DEVICE "enp0s3"
 
 #define WIN_WIDTH 1920
 #define WIN_HEIGHT 1080
@@ -69,6 +69,7 @@ int filter_match(const packet_info *pkt);
 int count_filtered();
 void copy_lower(char *dst, const char *src, size_t dst_size);
 int contains_text(const char *text, const char *query);
+void guardarArchivo();
 
 struct packet_info {
   int no;
@@ -430,6 +431,7 @@ int main(int argc, char **argv) {
   pcap_close(capdev);
   pthread_mutex_destroy(&pkt_buffer.mutex);
   CloseWindow();
+  guardarArchivo();
 
   return 0;
 }
@@ -749,4 +751,36 @@ void draw_titles() {
   for (int i = 0; i < 7; i++) {
     DrawText(titles[i], col_x[i], 80, 20, GREEN);
   }
+}
+void guardarArchivo(){
+  FILE *archivo = fopen("Archivo.csv","w");
+  if(archivo ==NULL){
+    printf("Hubo un error al abrir el archivo");
+    return;
+  }
+  //columnas
+fprintf(archivo, "no;id;time;lenght;srcip;destip;ttl;tos;protocol;info;rawLength;raw\n"); 
+ for (int i= 0; i<pkt_buffer.count;i++){
+   packet_info p = pkt_buffer.packets[i];
+ fprintf(archivo, "%d ;%d ;%.6f;%d; %s ; %s ;%d;%d; %s;%s ; %d ; ",
+    p.no,          
+    p.id,
+    p.time,
+    p.len,
+    p.src_ip,
+    p.dst_ip,
+    p.ttl,
+    p.tos,
+    p.protocol,
+    p.info,
+    p.raw_len
+    );
+    for (int j = 0; j < p.raw_len; j++) {
+      fprintf(archivo, "%02x", p.raw[j]);
+    }
+    fprintf(archivo, "\n");
+
+  }
+  
+  fclose(archivo);
 }
