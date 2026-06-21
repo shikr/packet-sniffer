@@ -95,18 +95,18 @@ struct packet_info
 
   //TCP
   char flags[3];
-  uint32_t seq_num; //tambien lo usa ICMP
-  uint32_t ack_num; //tambien lo usa ICMP
+  uint32_t seq_num; 
+  uint32_t ack_num; 
   uint16_t win_size;
 
   //UDP
-  int payload; //tambien lo usa ICMP
-  char data[RAW_BUFFER_SIZE]; //tambien lo usa ICMP
+  uint16_t payload;
+  uint16_t check;
 
   //ICMP
-  int type;
-  int code;
-  int identifier;
+  uint8_t type;
+  uint8_t code;
+  //uint16_t id;
 
 };
 
@@ -439,7 +439,7 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,const u_char *packet
     pkt_info.ack_num = ntohl(tcp_header->th_ack);
     pkt_info.win_size = ntohs(tcp_header->th_win);
     strcpy(pkt_info.protocol, "TCP");
-    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "%d -> %d [%c%c%c] Seq:%u - Ack:%u", src_port,dst_port,(tcp_header->th_flags & TH_SYN ? 'S': '-'),(tcp_header->th_flags & TH_ACK ? 'A' : '-'),(tcp_header->th_flags & TH_URG ? 'U': '-'),pkt_info.seq_num, pkt_info.ack_num);
+    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "%d -> %d [%c%c%c] Seq=%u - Ack=%u", src_port,dst_port,(tcp_header->th_flags & TH_SYN ? 'S': '-'),(tcp_header->th_flags & TH_ACK ? 'A' : '-'),(tcp_header->th_flags & TH_URG ? 'U': '-'),pkt_info.seq_num, pkt_info.ack_num);
    
     //capturar al flag para mostrarla en la ventana de info
     pkt_info.flags[0] = '\0';
@@ -468,7 +468,9 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,const u_char *packet
     src_port = ntohs(udp_header->uh_sport);
     dst_port = ntohs(udp_header->uh_dport);
     strcpy(pkt_info.protocol, "UDP");
-    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "%d -> %d", src_port, dst_port);
+    pkt_info.payload = ntohs(udp_header->uh_ulen)-sizeof(struct udphdr);
+    pkt_info.check = ntohs(udp_header->check);
+    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "%d -> %d Len =  %u", src_port, dst_port,pkt_info.payload);
     break;
   case IPPROTO_ICMP:
     if (transport_len < sizeof(struct icmp))
@@ -478,12 +480,13 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,const u_char *packet
       break;
     }
     icmp_header = (struct icmp *)packetd_ptr;
-    // int icmp_type = icmp_header->icmp_type;
-    // int icmp_type_code = icmp_header->icmp_code;
+    pkt_info.type = icmp_header->icmp_type;
+    pkt_info.code = icmp_header->icmp_code;
+    pkt_info.check = ntohs(icmp_header->icmp_cksum);
+    pkt_info.id = ntohs(icmp_header->icmp_hun.ih_idseq.icd_id);
+    pkt_info.seq_num = ntohs(icmp_header->icmp_hun.ih_idseq.icd_seq);
     strcpy(pkt_info.protocol, "ICMP");
-    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "type=%d code=%d", icmp_header->icmp_type, icmp_header->icmp_code);
-    // printf("PROTO: ICMP | TYPE: %d | CODE: %d |\n", icmp_type,
-    // icmp_type_code);
+    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "code = %d type = %d [%s] ID = 0x%04x Seq = %u", pkt_info.code, pkt_info.type,(pkt_info.type == 8 ? "reguest":"reply"),pkt_info.id,pkt_info.seq_num);
     break;
 
   default:
@@ -518,7 +521,6 @@ void *capture_thread(void *arg)
 void DrawPanel(Rectangle r) 
 { 
   DrawRectangleLinesEx(r, 1, GREEN); 
-  //DrawRectangleRounded(r, 0.05, 1, (Color){213, 212, 212, 255}); 
 }
 //-------------------------------------------------------------------------------------------------------------------//
 void ClampScroll(float *scroll, int items, float itemHeight, float panelHeight)
@@ -618,10 +620,13 @@ void draw_info_panel()
     snprintf(buffer, sizeof(buffer), "Length:  %d bytes", pkt->len);
     DrawText(buffer, x, y, 20, GREEN);
     y += 24;
-    snprintf(buffer, sizeof(buffer), "TTL/TOS: %d / 0x%x", pkt->ttl, pkt->tos);
+    snprintf(buffer, sizeof(buffer), "TTL:  %d", pkt->ttl);
     DrawText(buffer, x, y, 20, GREEN);
     y += 24;
-    snprintf(buffer, sizeof(buffer), "Raw:     %d bytes", pkt->raw_len);
+    snprintf(buffer, sizeof(buffer), "TOS:  0x%x",pkt->tos);
+    DrawText(buffer, x, y, 20, GREEN);
+    y += 24;
+    snprintf(buffer, sizeof(buffer), "Raw:  %d bytes", pkt->raw_len);
     DrawText(buffer, x, y, 20, GREEN);
     y += 24;
 
@@ -640,7 +645,43 @@ void draw_info_panel()
       DrawText(buffer, x, y, 20, GREEN);
       y += 24;
     }
+
+    if (strcmp(pkt->protocol,"UDP") == 0)
+    {
+      snprintf(buffer, sizeof(buffer), "Payload:  %u", pkt->payload);
+      DrawText(buffer, x, y, 20, GREEN);
+      y += 24;
+      if (pkt->check == 0)
+      {
+        snprintf(buffer, sizeof(buffer), "Check:  DISABLED");
+      }
+      else
+      {
+        snprintf(buffer, sizeof(buffer), "Check:  0x%04x", pkt->check);
+      }
+      DrawText(buffer, x, y, 20, GREEN);
+      y += 24;
+    }
     
+    if (strcmp(pkt->protocol,"ICMP") == 0)
+    {
+      if (pkt->type == 8)
+      {
+        snprintf(buffer, sizeof(buffer), "Type:  %d (request)", pkt->type);
+      }
+      else
+      {
+        snprintf(buffer, sizeof(buffer), "Type:  %d (reply)", pkt->type);
+      }
+      DrawText(buffer, x, y, 20, GREEN);
+      y += 24;
+      snprintf(buffer, sizeof(buffer), "Code:  %d", pkt->code);
+      DrawText(buffer, x, y, 20, GREEN);
+      y += 24;
+      snprintf(buffer, sizeof(buffer), "Payload:  %u", pkt->payload);
+      DrawText(buffer, x, y, 20, GREEN);
+      y += 24;
+    }
   }
   else
   {
