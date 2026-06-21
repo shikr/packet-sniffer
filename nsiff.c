@@ -19,6 +19,7 @@
 //gcc -Wall -Wextra nsiff.c -o sniff -lraylib -lpcap -lGL -lm -lpthread -ldl -lrt -lX11
 //sudo setcap cap_net_raw=+ep ./sniff
 //./sniff
+#define MAX_DEVICES 32 //Para enlistar los adaptadores
 
 #define INFO_BUFFER_SIZE 64
 #define PROTOCOL_BUFFER_SIZE 8
@@ -75,6 +76,11 @@ int count_filtered();
 void copy_lower(char *dst, const char *src, size_t dst_size);
 int contains_text(const char *text, const char *query);
 void *capture_thread(void *arg);
+void guardarArchivo();
+void start_capture_session(pcap_t **capdev, pthread_t *thread_id, const char *device_name);
+
+
+
 
 struct packet_info
 {
@@ -117,21 +123,40 @@ typedef struct
   pthread_mutex_t mutex;
 } packet_buffer;
 
+typedef enum {
+    STATE_SELECT_DEVICE,
+    STATE_SNIFFING
+} AppState;
+
+AppState current_state = STATE_SELECT_DEVICE;
+char selected_device_name[64] = "";
+
+typedef struct {
+    char names[MAX_DEVICES][64];
+    int count;
+} DeviceList;
+
+DeviceList get_available_devices(void);
+void handle_device_selection_clicks(Vector2 mouse, DeviceList list, pcap_t **capdev, pthread_t *thread_id);
+void draw_device_selection_screen(DeviceList list);
+
+
+
 packet_buffer pkt_buffer = {.count = 0};
 
 //-------------------------------------------------------------------------------------------------------------------//
 int main(int argc, char **argv)
 {
+ 
+
   char error_buffer[PCAP_ERRBUF_SIZE];
 
-  pcap_t *capdev = pcap_open_live(DEVICE, BUFSIZ, 0, 100, error_buffer); // el -1 lleva el consumo del procesador a 100%
+  pcap_t *capdev = NULL;// Se inicializa despues de seleccionar el dispositivo // el -1 lleva el consumo del procesador a 100%
+    pthread_t thread_id=0;
 
-  if (capdev == NULL)
-  {
-    printf("ERR: pcap_open_live() %s\n", error_buffer);
-    exit(1);
-  }
-
+  /*
+ 
+*/
   struct bpf_program bpf;
   bpf_u_int32 netmask = 0;
   bpf_u_int32 netp = 0;
@@ -159,32 +184,38 @@ int main(int argc, char **argv)
     }
   }
 
-  int link_hdr_type = pcap_datalink(capdev);
-
-  switch (link_hdr_type)
-  {
-  case DLT_NULL:
-    link_hdr_length = 4;
-    break;
-  case DLT_EN10MB:
-    link_hdr_length = 14;
-    break;
-  default:
-    link_hdr_length = 0;
-  }
 
   pthread_mutex_init(&pkt_buffer.mutex, NULL);
-  pthread_t thread_id;
-  pthread_create(&thread_id, NULL, capture_thread, (void *)capdev);
+  
 
   InitWindow(WIN_WIDTH, WIN_HEIGHT, "Packet Sniffer");
   SetTargetFPS(20);
 
   int last_packet_count = 0;
 
+  DeviceList dev_list = get_available_devices(); 
+    current_state = STATE_SELECT_DEVICE;
+
   while (!WindowShouldClose())
   {
     Vector2 mouse = GetMousePosition();
+
+     if (current_state == STATE_SELECT_DEVICE) {
+        Vector2 mouse = GetMousePosition();
+
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        handle_device_selection_clicks(mouse, dev_list, &capdev, &thread_id);
+    }
+    BeginDrawing();
+    ClearBackground(BLACK);
+    draw_device_selection_screen(dev_list);
+    EndDrawing();
+} else {
+   if (capdev == NULL)
+  {
+    printf("ERR: pcap_open_live() %s\n", error_buffer);
+    exit(1);
+  }
 
     if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
     {
@@ -207,6 +238,7 @@ int main(int argc, char **argv)
       if (CheckCollisionPointRec(mouse, Btn_save))
       {
         save_to_file();
+        guardarArchivo();
       }
 
       if (CheckCollisionPointRec(mouse, Btn_live))
@@ -354,13 +386,19 @@ int main(int argc, char **argv)
 
     EndDrawing();
   }
-
-  pcap_breakloop(capdev);
-  pthread_join(thread_id, NULL);
-  pcap_close(capdev);
+  }  
+  if(capdev!=NULL){
+    pcap_breakloop(capdev);
+    pthread_join(thread_id, NULL);
+    pcap_close(capdev);
+  }
+ 
   pthread_mutex_destroy(&pkt_buffer.mutex);
   CloseWindow();
+  guardarArchivo();
 
+  
+  
   return 0;
 }
 //-------------------------------------------------------------------------------------------------------------------//
@@ -928,3 +966,124 @@ void draw_titles()
   }
 }
 //-------------------------------------------------------------------------------------------------------------------//
+void guardarArchivo(){
+
+    time_t now = time(NULL);
+  struct tm tm_info;
+  localtime_r(&now, &tm_info);
+
+  char fname[256];
+  snprintf(fname, sizeof(fname), "Captura de paquetes_%04d-%02d-%02d_%02d-%02d-%02d.csv", tm_info.tm_year + 1900, tm_info.tm_mon + 1, tm_info.tm_mday, tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec);
+  FILE *archivo = fopen(fname,"w");
+  if(archivo ==NULL){
+    printf("Hubo un error al abrir el archivo");
+    return;
+  }
+  //columnas
+fprintf(archivo, "no;id;time;lenght;srcip;destip;ttl;tos;protocol;info;rawLength;raw\n"); 
+ for (int i= 0; i<pkt_buffer.count;i++){
+   packet_info p = pkt_buffer.packets[i];
+ fprintf(archivo, "%d ;%d ;%.6f;%d; %s ; %s ;%d;%d; %s;%s ; %d ; ",
+    p.no,          
+    p.id,
+    p.time,
+    p.len,
+    p.src_ip,
+    p.dst_ip,
+    p.ttl,
+    p.tos,
+    p.protocol,
+    p.info,
+    p.raw_len
+    );
+    for (int j = 0; j < p.raw_len; j++) {
+      fprintf(archivo, "%02x", p.raw[j]);
+    }
+    fprintf(archivo, "\n");
+
+  }
+  
+  fclose(archivo);
+}
+
+DeviceList get_available_devices(void) {
+    DeviceList list = { .count = 0 };
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_if_t *alldevs, *d;
+
+    if (pcap_findalldevs(&alldevs, errbuf) != -1) {
+        for (d = alldevs; d != NULL && list.count < MAX_DEVICES; d = d->next) {
+            strncpy(list.names[list.count], d->name, 63);
+            list.names[list.count][63] = '\0'; // Ensure null-termination
+            list.count++;
+        }
+        pcap_freealldevs(alldevs);
+    } else {
+        printf("Error running pcap_findalldevs: %s\n", errbuf);
+    }
+    return list;
+}
+
+void start_capture_session(pcap_t **capdev, pthread_t *thread_id, const char *device_name) {
+    char error_buffer[PCAP_ERRBUF_SIZE];
+
+    *capdev = pcap_open_live(device_name, BUFSIZ, 0, 100, error_buffer);
+    if (*capdev == NULL) {
+        printf("ERR: pcap_open_live() failed for %s: %s\n", device_name, error_buffer);
+        exit(1);
+    }
+
+    //movido aqui
+    int link_hdr_type = pcap_datalink(*capdev);
+    switch (link_hdr_type) {
+        case DLT_NULL:    link_hdr_length = 4;  break;
+        case DLT_EN10MB:  link_hdr_length = 14; break;
+        default:          link_hdr_length = 0;
+    }
+
+    // Initialize mutex and boot background thread processing loop
+    pthread_create(thread_id, NULL, capture_thread, (void *)*capdev);
+}
+
+void draw_device_selection_screen(DeviceList list) {
+    DrawText("Seleccione una interfaz de red para comenzar a analizar", 50, 50, 28, GREEN);
+    DrawLine(50, 95, WIN_WIDTH - 50, 95, DARKGREEN);
+
+    int start_x = 100;
+    int start_y = 150;
+    int row_height = 45;
+    Vector2 mouse = GetMousePosition();
+
+    for (int i = 0; i < list.count; i++) {
+        Rectangle item_rec = { start_x, start_y + (i * row_height), 400, 35 };
+        bool is_hovered = CheckCollisionPointRec(mouse, item_rec);
+        
+        // Highlight row box backgrounds dynamically
+        Color bg_color = is_hovered ? (Color){30, 80, 30, 255} : (Color){15, 15, 15, 255};
+        Color border_color = is_hovered ? GREEN : DARKGREEN;
+        Color text_color = is_hovered ? YELLOW : GREEN;
+
+        DrawRectangleRec(item_rec, bg_color);
+        DrawRectangleLinesEx(item_rec, 1, border_color);
+        DrawText(list.names[i], item_rec.x + 15, item_rec.y + 7, 20, text_color);
+    }
+}
+
+void handle_device_selection_clicks(Vector2 mouse, DeviceList list, pcap_t **capdev, pthread_t *thread_id) {
+    int start_x = 100;
+    int start_y = 150;
+    int row_height = 45;
+
+    for (int i = 0; i < list.count; i++) {
+        Rectangle item_rec = { start_x, start_y + (i * row_height), 400, 35 };
+        
+        if (CheckCollisionPointRec(mouse, item_rec)) {
+            strncpy(selected_device_name, list.names[i], sizeof(selected_device_name) - 1);
+            start_capture_session(capdev, thread_id, selected_device_name);
+            
+            // Cambia de estado
+            current_state = STATE_SNIFFING;
+            return;
+        }
+    }
+}
