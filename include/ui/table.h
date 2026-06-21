@@ -1,6 +1,6 @@
 #pragma once
 
-#include "sniffer.h"
+#include "state.h"
 #include <gtk/gtk.h>
 
-GtkWidget *table_render(AppSniffer *sniffer);
+GtkWidget *table_render(AppState *sniffer);

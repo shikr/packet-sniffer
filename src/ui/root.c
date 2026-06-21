@@ -1,5 +1,5 @@
 #include "ui/root.h"
-#include "sniffer.h"
+#include "state.h"
 #include "ui/details.h"
 #include "ui/table.h"
 #include "ui/toolbar.h"
@@ -19,13 +19,15 @@ void on_paned_realize(GtkWidget *paned, gpointer data) {
 }
 
 GtkWidget *root_render() {
-  AppSniffer *sniffer = app_sniffer_new("eth0", NULL);
+  AppState *state = app_state_new("eth0", NULL);
+
+  app_state_start_sniffer(state);
 
   GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
   GtkWidget *toolbar = toolbar_render();
   GtkWidget *vpane = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
-  GtkWidget *table = table_render(sniffer);
-  GtkWidget *hpane = details_render();
+  GtkWidget *table = table_render(state);
+  GtkWidget *hpane = details_render(state);
 
   gtk_paned_add1(GTK_PANED(vpane), table);
   gtk_paned_add2(GTK_PANED(vpane), hpane);

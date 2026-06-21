@@ -68,10 +68,12 @@ AppSniffer *app_sniffer_new(char *device, char *filter) {
 }
 
 void app_sniffer_add_packet(AppSniffer *self, PacketInfo *pkt_info) {
+  int index;
   g_mutex_lock(&self->mutex);
   g_ptr_array_add(self->packets, pkt_info);
+  index = self->packets->len - 1;
   g_mutex_unlock(&self->mutex);
-  g_signal_emit(self, signals[SIG_CAPTURED], 0, self->packets->len - 1);
+  g_signal_emit(self, signals[SIG_CAPTURED], 0, index);
 }
 
 void capture_handler(u_char *user, const struct pcap_pkthdr *pkthdr,
@@ -278,6 +280,6 @@ gboolean update_packets_from_queue(gpointer user_data) {
   return G_SOURCE_CONTINUE;
 }
 
-void app_sniffer_start_timer(AppSniffer *self) {
-  g_timeout_add(100, update_packets_from_queue, self);
+guint app_sniffer_start_timer(AppSniffer *self) {
+  return g_timeout_add(100, update_packets_from_queue, self);
 }

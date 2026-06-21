@@ -1,4 +1,6 @@
 #include "ui/details.h"
+#include "packet_info.h"
+#include "state.h"
 #include <gtk/gtk.h>
 
 void update(gpointer data) {
@@ -43,7 +45,46 @@ GtkWidget *protocol_tree() {
   return tree_view;
 }
 
-GtkWidget *details_render() {
+void on_selected(GObject *obj, GParamSpec *pspec, gpointer data) {
+  GtkTextBuffer *buffer = GTK_TEXT_BUFFER(data);
+  PacketInfo *pkt;
+  g_object_get(obj, "selected", &pkt, NULL);
+  if (!pkt)
+    return;
+  GString *str = g_string_new(NULL);
+  guint len = pkt->raw_len;
+
+  for (guint i = 0; i < len; i += 16) {
+    // Offset
+    g_string_append_printf(str, "%04x  ", i);
+
+    // Hex
+    for (guint j = 0; j < 16; j++) {
+      if (i + j < len)
+        g_string_append_printf(str, "%02x ", pkt->raw[i + j]);
+      else
+        g_string_append(str, "   "); // padding
+
+      if (j == 7)
+        g_string_append_c(str, ' '); // separador central
+    }
+
+    g_string_append(str, "  ");
+
+    // ASCII
+    for (guint j = 0; j < 16 && i + j < len; j++) {
+      guint8 c = pkt->raw[i + j];
+      g_string_append_printf(str, "%c", g_ascii_isprint(c) ? c : '.');
+    }
+
+    g_string_append_c(str, '\n');
+  }
+
+  gtk_text_buffer_set_text(buffer, str->str, str->len);
+  g_string_free(str, TRUE);
+}
+
+GtkWidget *details_render(AppState *state) {
   GtkWidget *hpane = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
   GtkWidget *content = gtk_text_view_new();
   GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(content));
@@ -55,6 +96,10 @@ GtkWidget *details_render() {
 
   gtk_paned_add1(GTK_PANED(hpane), tree);
   gtk_paned_add2(GTK_PANED(hpane), content);
+
+  gtk_paned_set_wide_handle(GTK_PANED(hpane), TRUE);
+
+  g_signal_connect(state, "notify::selected", G_CALLBACK(on_selected), buffer);
 
   return hpane;
 }

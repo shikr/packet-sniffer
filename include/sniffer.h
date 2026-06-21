@@ -15,6 +15,6 @@ void app_sniffer_stop(AppSniffer *self);
 
 PacketInfo *app_sniffer_get_packet(AppSniffer *self, guint index);
 
-void app_sniffer_start_timer(AppSniffer *self);
+guint app_sniffer_start_timer(AppSniffer *self);
 
 G_END_DECLS

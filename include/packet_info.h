@@ -3,6 +3,18 @@
 #include <glib.h>
 #include <sys/types.h>
 
+enum PacketColumns {
+  COL_NO,
+  COL_TIME,
+  COL_SOURCE,
+  COL_DEST,
+  COL_PROTOCOL,
+  COL_LEN,
+  COL_INFO,
+  COL_INDEX,
+  NUM_COLS
+};
+
 typedef struct {
   int no;
   int id;
