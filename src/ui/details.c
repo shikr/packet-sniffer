@@ -1,40 +1,45 @@
 #include "ui/details.h"
+#include "glib.h"
 #include "packet_info.h"
+#include "proto_node.h"
 #include "state.h"
 #include <gtk/gtk.h>
 
-void update(gpointer data) {
-  GtkTreeStore *store = GTK_TREE_STORE(data);
-  GtkTreeIter iter;
-  GtkTreePath *path = gtk_tree_path_new_from_string("0:0:0");
+enum { COL_LABEL, NUM_COLUMNS };
 
-  if (gtk_tree_model_get_iter(GTK_TREE_MODEL(store), &iter, path)) {
-    gtk_tree_store_set(store, &iter, 0, "Version: 6", -1);
+typedef struct {
+  GtkTreeStore *store;
+  GtkTextBuffer *buffer;
+} SignalData;
+
+void packet_fill_tree_store(GtkTreeStore *store, PacketInfo *pkt) {
+  gtk_tree_store_clear(store);
+
+  for (guint i = 0; i < pkt->layers->len; i++) {
+    ProtoNode *layer = g_ptr_array_index(pkt->layers, i);
+
+    // Nodo raíz de la capa
+    GtkTreeIter parent;
+    gtk_tree_store_append(store, &parent, NULL);
+    gtk_tree_store_set(store, &parent, COL_LABEL, layer->label, -1);
+
+    // Hijos
+    for (guint j = 0; j < layer->children->len; j++) {
+      ProtoNode *child = g_ptr_array_index(layer->children, j);
+
+      GtkTreeIter child_iter;
+      gtk_tree_store_append(store, &child_iter, &parent);
+      gtk_tree_store_set(store, &child_iter, COL_LABEL, child->label, -1);
+    }
   }
 
-  gtk_tree_path_free(path);
+  // Expandir todo
+  // GtkTreeView *tree = GTK_TREE_VIEW(/* tu widget */);
+  // gtk_tree_view_expand_all(tree);
 }
 
 GtkWidget *protocol_tree() {
-  GtkTreeStore *store = gtk_tree_store_new(1, G_TYPE_STRING);
-  GtkTreeIter eth, ip, tcp;
-
-  gtk_tree_store_append(store, &eth, NULL);
-  gtk_tree_store_set(store, &eth, 0, "Ethernet Header", -1);
-
-  gtk_tree_store_append(store, &ip, &eth);
-  gtk_tree_store_set(store, &ip, 0, "IP Header", -1);
-
-  GtkTreeIter field;
-  gtk_tree_store_append(store, &field, &ip);
-  gtk_tree_store_set(store, &field, 0, "Version: 4", -1);
-  gtk_tree_store_append(store, &field, &ip);
-  gtk_tree_store_set(store, &field, 0, "TTL: 64", -1);
-
-  gtk_tree_store_append(store, &tcp, &ip);
-  gtk_tree_store_set(store, &tcp, 0, "TCP Header", -1);
-
-  g_timeout_add_once(5000, update, store);
+  GtkTreeStore *store = gtk_tree_store_new(NUM_COLUMNS, G_TYPE_STRING);
 
   GtkWidget *tree_view = gtk_tree_view_new_with_model(GTK_TREE_MODEL(store));
   GtkCellRenderer *r = gtk_cell_renderer_text_new();
@@ -45,8 +50,8 @@ GtkWidget *protocol_tree() {
   return tree_view;
 }
 
-void on_selected(GObject *obj, GParamSpec *pspec, gpointer data) {
-  GtkTextBuffer *buffer = GTK_TEXT_BUFFER(data);
+void on_selected(GObject *obj, GParamSpec *pspec, gpointer user_data) {
+  SignalData *data = user_data;
   PacketInfo *pkt;
   g_object_get(obj, "selected", &pkt, NULL);
   if (!pkt)
@@ -80,9 +85,13 @@ void on_selected(GObject *obj, GParamSpec *pspec, gpointer data) {
     g_string_append_c(str, '\n');
   }
 
-  gtk_text_buffer_set_text(buffer, str->str, str->len);
+  gtk_text_buffer_set_text(data->buffer, str->str, str->len);
   g_string_free(str, TRUE);
+
+  packet_fill_tree_store(data->store, pkt);
 }
+
+static void g_signal_data_free(gpointer data, GClosure *_) { g_free(data); }
 
 GtkWidget *details_render(AppState *state) {
   GtkWidget *hpane = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
@@ -99,7 +108,14 @@ GtkWidget *details_render(AppState *state) {
 
   gtk_paned_set_wide_handle(GTK_PANED(hpane), TRUE);
 
-  g_signal_connect(state, "notify::selected", G_CALLBACK(on_selected), buffer);
+  SignalData *sig_data = g_new0(SignalData, 1);
+  sig_data->store =
+      GTK_TREE_STORE(gtk_tree_view_get_model(GTK_TREE_VIEW(tree)));
+  sig_data->buffer = buffer;
+
+  g_signal_connect_data(state, "notify::selected", G_CALLBACK(on_selected),
+                        sig_data, (GClosureNotify)g_signal_data_free,
+                        G_CONNECT_AFTER);
 
   return hpane;
 }
