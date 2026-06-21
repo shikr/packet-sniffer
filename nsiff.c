@@ -16,10 +16,10 @@
 #include <string.h>
 #include <time.h>
 
-//gcc -Wall -Wextra nsiff.c -o sniff -lraylib -lpcap -lGL -lm -lpthread -ldl -lrt -lX11
-//sudo setcap cap_net_raw=+ep ./sniff
+// gcc -Wall -Wextra nsiff.c -o sniff -lraylib -lpcap -lGL -lm -lpthread -ldl -lrt -lX11
+// sudo setcap cap_net_raw=+ep ./sniff
 //./sniff
-#define MAX_DEVICES 32 //Para enlistar los adaptadores
+#define MAX_DEVICES 32 // Para enlistar los adaptadores
 
 #define INFO_BUFFER_SIZE 64
 #define PROTOCOL_BUFFER_SIZE 8
@@ -47,6 +47,8 @@ char filter_buf[256] = "";
 int filter_active = 0;
 int capture_paused = 0;
 
+pcap_t *handle;
+
 // ventanas
 Rectangle Btn_stop = {520, 42, 80, 28};
 Rectangle Btn_save = {612, 42, 110, 28};
@@ -68,7 +70,7 @@ void draw_mem_panel();
 void draw_hex_panel();
 void draw_filter_input();
 void draw_buttons();
-void draw_button(Rectangle button, const char *text, Color border_color,Color text_color, int text_x_offset);
+void draw_button(Rectangle button, const char *text, Color border_color, Color text_color, int text_x_offset);
 void draw_titles();
 void save_to_file();
 int filter_match(const packet_info *pkt);
@@ -78,9 +80,6 @@ int contains_text(const char *text, const char *query);
 void *capture_thread(void *arg);
 void guardarArchivo();
 void start_capture_session(pcap_t **capdev, pthread_t *thread_id, const char *device_name);
-
-
-
 
 struct packet_info
 {
@@ -98,22 +97,22 @@ struct packet_info
   char info[INFO_BUFFER_SIZE];
   int raw_len;
   __u_char raw[RAW_BUFFER_SIZE];
+  char encap[10];
 
-  //TCP
+  // TCP
   char flags[3];
-  uint32_t seq_num; 
-  uint32_t ack_num; 
+  uint32_t seq_num;
+  uint32_t ack_num;
   uint16_t win_size;
 
-  //UDP
+  // UDP
   uint16_t payload;
   uint16_t check;
 
-  //ICMP
+  // ICMP
   uint8_t type;
   uint8_t code;
-  //uint16_t id;
-
+  // uint16_t id;
 };
 
 typedef struct
@@ -123,40 +122,36 @@ typedef struct
   pthread_mutex_t mutex;
 } packet_buffer;
 
-typedef enum {
-    STATE_SELECT_DEVICE,
-    STATE_SNIFFING
+typedef enum
+{
+  STATE_SELECT_DEVICE,
+  STATE_SNIFFING
 } AppState;
 
 AppState current_state = STATE_SELECT_DEVICE;
 char selected_device_name[64] = "";
 
-typedef struct {
-    char names[MAX_DEVICES][64];
-    int count;
+typedef struct
+{
+  char names[MAX_DEVICES][64];
+  int count;
 } DeviceList;
 
 DeviceList get_available_devices(void);
 void handle_device_selection_clicks(Vector2 mouse, DeviceList list, pcap_t **capdev, pthread_t *thread_id);
 void draw_device_selection_screen(DeviceList list);
 
-
-
 packet_buffer pkt_buffer = {.count = 0};
 
 //-------------------------------------------------------------------------------------------------------------------//
 int main(int argc, char **argv)
 {
- 
 
   char error_buffer[PCAP_ERRBUF_SIZE];
 
-  pcap_t *capdev = NULL;// Se inicializa despues de seleccionar el dispositivo // el -1 lleva el consumo del procesador a 100%
-    pthread_t thread_id=0;
+  pcap_t *capdev = NULL; // Se inicializa despues de seleccionar el dispositivo
+  pthread_t thread_id = 0;
 
-  /*
- 
-*/
   struct bpf_program bpf;
   bpf_u_int32 netmask = 0;
   bpf_u_int32 netp = 0;
@@ -171,238 +166,237 @@ int main(int argc, char **argv)
     if (pcap_compile(capdev, &bpf, argv[1], 0, netmask) == PCAP_ERROR)
     {
       printf("ERR: pcap_compile() %s", pcap_geterr(capdev));
-      // exit(1);
     }
     else
     {
       if (pcap_setfilter(capdev, &bpf) == PCAP_ERROR)
       {
         printf("ERR: pcap_setfilter() %s", pcap_geterr(capdev));
-        // exit(1);
       }
       pcap_freecode(&bpf);
     }
   }
 
-
   pthread_mutex_init(&pkt_buffer.mutex, NULL);
-  
 
   InitWindow(WIN_WIDTH, WIN_HEIGHT, "Packet Sniffer");
   SetTargetFPS(20);
 
   int last_packet_count = 0;
 
-  DeviceList dev_list = get_available_devices(); 
-    current_state = STATE_SELECT_DEVICE;
+  DeviceList dev_list = get_available_devices();
+  current_state = STATE_SELECT_DEVICE;
 
   while (!WindowShouldClose())
   {
     Vector2 mouse = GetMousePosition();
 
-     if (current_state == STATE_SELECT_DEVICE) {
-        Vector2 mouse = GetMousePosition();
-
-    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        handle_device_selection_clicks(mouse, dev_list, &capdev, &thread_id);
-    }
-    BeginDrawing();
-    ClearBackground(BLACK);
-    draw_device_selection_screen(dev_list);
-    EndDrawing();
-} else {
-   if (capdev == NULL)
-  {
-    printf("ERR: pcap_open_live() %s\n", error_buffer);
-    exit(1);
-  }
-
-    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
+    if (current_state == STATE_SELECT_DEVICE)
     {
-      if (CheckCollisionPointRec(mouse, Filter_input))
+      Vector2 mouse = GetMousePosition();
+
+      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
       {
-        filter_active = 1;
+        handle_device_selection_clicks(mouse, dev_list, &capdev, &thread_id);
       }
-      else if (!CheckCollisionPointRec(mouse, Packet_list) && !CheckCollisionPointRec(mouse, Btn_stop) && !CheckCollisionPointRec(mouse, Btn_save) && !CheckCollisionPointRec(mouse, Btn_live))
+      BeginDrawing();
+      ClearBackground(BLACK);
+      draw_device_selection_screen(dev_list);
+      EndDrawing();
+    }
+    else
+    {
+      if (capdev == NULL)
       {
-        filter_active = 0;
+        printf("ERR: pcap_open_live() %s\n", error_buffer);
+        exit(1);
       }
 
-      if (CheckCollisionPointRec(mouse, Btn_stop))
+      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
       {
-        pthread_mutex_lock(&pkt_buffer.mutex);
-        capture_paused = !capture_paused;
-        pthread_mutex_unlock(&pkt_buffer.mutex);
+        if (CheckCollisionPointRec(mouse, Filter_input))
+        {
+          filter_active = 1;
+        }
+        else if (!CheckCollisionPointRec(mouse, Packet_list) && !CheckCollisionPointRec(mouse, Btn_stop) && !CheckCollisionPointRec(mouse, Btn_save) && !CheckCollisionPointRec(mouse, Btn_live))
+        {
+          filter_active = 0;
+        }
+
+        if (CheckCollisionPointRec(mouse, Btn_stop))
+        {
+          pthread_mutex_lock(&pkt_buffer.mutex);
+          capture_paused = !capture_paused;
+          pthread_mutex_unlock(&pkt_buffer.mutex);
+        }
+
+        if (CheckCollisionPointRec(mouse, Btn_save))
+        {
+          save_to_file();
+          guardarArchivo();
+        }
+
+        if (CheckCollisionPointRec(mouse, Btn_live))
+        {
+          pthread_mutex_lock(&pkt_buffer.mutex);
+          int visible = count_filtered();
+          float max_scroll = visible * 30 - Packet_list.height;
+          scroll_list = (max_scroll > 0) ? -max_scroll : 0;
+          auto_scroll_list = 1;
+          pthread_mutex_unlock(&pkt_buffer.mutex);
+        }
+
+        if (CheckCollisionPointRec(mouse, Packet_list))
+        {
+          pthread_mutex_lock(&pkt_buffer.mutex);
+          int rel_y = mouse.y - Packet_list.y - 10 - scroll_list;
+          int idx = rel_y / 30;
+          int visible_row = 0;
+          selected_index = -1;
+
+          if (rel_y >= 0)
+          {
+            for (int i = 0; i < pkt_buffer.count; i++)
+            {
+              if (!filter_match(&pkt_buffer.packets[i]))
+              {
+                continue;
+              }
+
+              if (visible_row == idx)
+              {
+                selected_index = i;
+                break;
+              }
+              visible_row++;
+            }
+          }
+          pthread_mutex_unlock(&pkt_buffer.mutex);
+        }
       }
 
-      if (CheckCollisionPointRec(mouse, Btn_save))
+      if (filter_active)
       {
-        save_to_file();
-        guardarArchivo();
+        int ch = GetCharPressed();
+        while (ch > 0)
+        {
+          int len = strlen(filter_buf);
+          if (len < (int)sizeof(filter_buf) - 1 && ch >= 32 && ch < 127)
+          {
+            filter_buf[len] = (char)ch;
+            filter_buf[len + 1] = '\0';
+          }
+          ch = GetCharPressed();
+        }
+
+        if (IsKeyPressed(KEY_BACKSPACE) && strlen(filter_buf) > 0)
+        {
+          filter_buf[strlen(filter_buf) - 1] = '\0';
+        }
+        if (IsKeyPressed(KEY_ESCAPE))
+        {
+          filter_buf[0] = '\0';
+          filter_active = 0;
+        }
+        if (IsKeyPressed(KEY_ENTER))
+        {
+          filter_active = 0;
+        }
       }
 
-      if (CheckCollisionPointRec(mouse, Btn_live))
-      {
-        pthread_mutex_lock(&pkt_buffer.mutex);
-        int visible = count_filtered();
-        float max_scroll = visible * 30 - Packet_list.height;
-        scroll_list = (max_scroll > 0) ? -max_scroll : 0;
-        auto_scroll_list = 1;
-        pthread_mutex_unlock(&pkt_buffer.mutex);
-      }
+      float wheel = GetMouseWheelMove() * 20;
 
+      // scroll solo si el raton esta encima
       if (CheckCollisionPointRec(mouse, Packet_list))
       {
-        pthread_mutex_lock(&pkt_buffer.mutex);
-        int rel_y = mouse.y - Packet_list.y - 10 - scroll_list;
-        int idx = rel_y / 30;
-        int visible_row = 0;
-        selected_index = -1;
-
-        if (rel_y >= 0)
+        if (wheel > 0)
         {
-          for (int i = 0; i < pkt_buffer.count; i++)
-          {
-            if (!filter_match(&pkt_buffer.packets[i]))
-            {
-              continue;
-            }
-
-            if (visible_row == idx)
-            {
-              selected_index = i;
-              break;
-            }
-            visible_row++;
-          }
+          auto_scroll_list = 0;
         }
-        pthread_mutex_unlock(&pkt_buffer.mutex);
+        scroll_list += wheel;
       }
-    }
-
-    if (filter_active)
-    {
-      int ch = GetCharPressed();
-      while (ch > 0)
+      if (CheckCollisionPointRec(mouse, Packet_info))
       {
-        int len = strlen(filter_buf);
-        if (len < (int)sizeof(filter_buf) - 1 && ch >= 32 && ch < 127)
+        scroll_info += wheel;
+      }
+      if (CheckCollisionPointRec(mouse, packet_raw_mem))
+      {
+        scroll_mem += wheel;
+      }
+      if (CheckCollisionPointRec(mouse, packet_raw_hex))
+      {
+        scroll_hex += wheel;
+      }
+
+      pthread_mutex_lock(&pkt_buffer.mutex);
+      int visible = count_filtered();
+
+      if (auto_scroll_list && pkt_buffer.count > last_packet_count)
+      {
+        float max_scroll = visible * 30 - Packet_list.height;
+        scroll_list = (max_scroll > 0) ? -max_scroll : 0;
+      }
+      last_packet_count = pkt_buffer.count;
+
+      int raw_lines = 1;
+      if (selected_index >= 0 && selected_index < pkt_buffer.count)
+      {
+        raw_lines = (pkt_buffer.packets[selected_index].raw_len + 15) / 16;
+        if (raw_lines < 1)
         {
-          filter_buf[len] = (char)ch;
-          filter_buf[len + 1] = '\0';
+          raw_lines = 1;
         }
-        ch = GetCharPressed();
       }
 
-      if (IsKeyPressed(KEY_BACKSPACE) && strlen(filter_buf) > 0)
-      {
-        filter_buf[strlen(filter_buf) - 1] = '\0';
-      }
-      if (IsKeyPressed(KEY_ESCAPE))
-      {
-        filter_buf[0] = '\0';
-        filter_active = 0;
-      }
-      if (IsKeyPressed(KEY_ENTER))
-      {
-        filter_active = 0;
-      }
-    }
+      // limitar el scroll
+      ClampScroll(&scroll_list, visible, 30, Packet_list.height);
+      ClampScroll(&scroll_info, 20, 25, Packet_info.height);
+      ClampScroll(&scroll_mem, raw_lines, 16, packet_raw_mem.height);
+      ClampScroll(&scroll_hex, raw_lines, 16, packet_raw_hex.height);
 
-    float wheel = GetMouseWheelMove() * 20;
-
-    // scroll solo si el raton esta encima
-    if (CheckCollisionPointRec(mouse, Packet_list))
-    {
-      if (wheel > 0)
-      {
-        auto_scroll_list = 0;
-      }
-      scroll_list += wheel;
-    }
-    if (CheckCollisionPointRec(mouse, Packet_info))
-    {
-      scroll_info += wheel;
-    }
-    if (CheckCollisionPointRec(mouse, packet_raw_mem))
-    {
-      scroll_mem += wheel;
-    }
-    if (CheckCollisionPointRec(mouse, packet_raw_hex))
-    {
-      scroll_hex += wheel;
-    }
-
-    pthread_mutex_lock(&pkt_buffer.mutex);
-    int visible = count_filtered();
-
-    if (auto_scroll_list && pkt_buffer.count > last_packet_count)
-    {
       float max_scroll = visible * 30 - Packet_list.height;
-      scroll_list = (max_scroll > 0) ? -max_scroll : 0;
-    }
-    last_packet_count = pkt_buffer.count;
-
-    int raw_lines = 1;
-    if (selected_index >= 0 && selected_index < pkt_buffer.count)
-    {
-      raw_lines = (pkt_buffer.packets[selected_index].raw_len + 15) / 16;
-      if (raw_lines < 1)
+      if (max_scroll < 0)
       {
-        raw_lines = 1;
+        max_scroll = 0;
       }
+      if (scroll_list <= -max_scroll + 5)
+      {
+        auto_scroll_list = 1;
+      }
+
+      // dibujar ventanitas
+      BeginDrawing();
+      ClearBackground(BLACK);
+
+      draw_filter_input();
+      draw_buttons();
+      draw_titles();
+
+      draw_packet_list();
+      draw_info_panel();
+      draw_mem_panel();
+      draw_hex_panel();
+
+      pthread_mutex_unlock(&pkt_buffer.mutex);
+
+      EndDrawing();
     }
-
-    // limitar el scroll
-    ClampScroll(&scroll_list, visible, 30, Packet_list.height);
-    ClampScroll(&scroll_info, 20, 25, Packet_info.height);
-    ClampScroll(&scroll_mem, raw_lines, 16, packet_raw_mem.height);
-    ClampScroll(&scroll_hex, raw_lines, 16, packet_raw_hex.height);
-
-    float max_scroll = visible * 30 - Packet_list.height;
-    if (max_scroll < 0)
-    {
-      max_scroll = 0;
-    }
-    if (scroll_list <= -max_scroll + 5)
-    {
-      auto_scroll_list = 1;
-    }
-
-    // dibujar ventanitas
-    BeginDrawing();
-    ClearBackground(BLACK);
-
-    draw_filter_input();
-    draw_buttons();
-    draw_titles();
-
-    draw_packet_list();
-    draw_info_panel();
-    draw_mem_panel();
-    draw_hex_panel();
-
-    pthread_mutex_unlock(&pkt_buffer.mutex);
-
-    EndDrawing();
   }
-  }  
-  if(capdev!=NULL){
+  if (capdev != NULL)
+  {
     pcap_breakloop(capdev);
     pthread_join(thread_id, NULL);
     pcap_close(capdev);
   }
- 
+
   pthread_mutex_destroy(&pkt_buffer.mutex);
   CloseWindow();
   guardarArchivo();
 
-  
-  
   return 0;
 }
 //-------------------------------------------------------------------------------------------------------------------//
-void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,const u_char *packetd_ptr)
+void call_me(u_char *user, const struct pcap_pkthdr *pkthdr, const u_char *packetd_ptr)
 {
   (void)user;
 
@@ -435,15 +429,42 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,const u_char *packet
   packetd_ptr += link_hdr_length;
   struct ip *ip_hdr = (struct ip *)packetd_ptr;
 
-  //capturar la info que los paquetes tienen en comun
+  // capturar la info que los paquetes tienen en comun
   strcpy(pkt_info.src_ip, inet_ntoa(ip_hdr->ip_src));
   strcpy(pkt_info.dst_ip, inet_ntoa(ip_hdr->ip_dst));
-  snprintf(pkt_info.src_mac, sizeof(pkt_info.src_mac),"%02X:%02X:%02X:%02X:%02X:%02X",eth->ether_shost[0],eth->ether_shost[1],eth->ether_shost[2],eth->ether_shost[3],eth->ether_shost[4],eth->ether_shost[5]);
-  snprintf(pkt_info.dts_mac, sizeof(pkt_info.dts_mac),"%02X:%02X:%02X:%02X:%02X:%02X",eth->ether_dhost[0],eth->ether_dhost[1],eth->ether_dhost[2],eth->ether_dhost[3],eth->ether_dhost[4],eth->ether_dhost[5]);
+  snprintf(pkt_info.src_mac, sizeof(pkt_info.src_mac), "%02X:%02X:%02X:%02X:%02X:%02X", eth->ether_shost[0], eth->ether_shost[1], eth->ether_shost[2], eth->ether_shost[3], eth->ether_shost[4], eth->ether_shost[5]);
+  snprintf(pkt_info.dts_mac, sizeof(pkt_info.dts_mac), "%02X:%02X:%02X:%02X:%02X:%02X", eth->ether_dhost[0], eth->ether_dhost[1], eth->ether_dhost[2], eth->ether_dhost[3], eth->ether_dhost[4], eth->ether_dhost[5]);
   pkt_info.id = ntohs(ip_hdr->ip_id);
   pkt_info.ttl = ip_hdr->ip_ttl;
   pkt_info.tos = ip_hdr->ip_tos;
   pkt_info.len = ntohs(ip_hdr->ip_len);
+  int dlt = pcap_datalink(handle);
+  switch (dlt)
+  {
+  case DLT_EN10MB:
+    strcpy(pkt_info.encap,"Ethernet");
+    break;
+
+  case DLT_LINUX_SLL:
+    strcpy(pkt_info.encap,"Linux Cooked Capture");
+    break;
+
+  case DLT_RAW:
+    strcpy(pkt_info.encap,"Raw IP");
+    break;
+
+  case DLT_NULL:
+    strcpy(pkt_info.encap,"Loopback");
+    break;
+
+  case DLT_IEEE802_11:
+    strcpy(pkt_info.encap,"WiFi (802.11)");
+    break;
+
+  default:
+    strcpy(pkt_info.encap,"---");
+    break;
+  }
 
   int packet_hlen = ip_hdr->ip_hl * 4;
   if (packet_hlen < 20 || pkthdr->caplen < (unsigned int)(link_hdr_length + packet_hlen))
@@ -460,7 +481,7 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,const u_char *packet
   struct icmp *icmp_header;
   int src_port, dst_port;
 
-  //dependiendo del tipo de protocolo
+  // dependiendo del tipo de protocolo
   switch (protocol_type)
   {
   case IPPROTO_TCP:
@@ -477,9 +498,9 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,const u_char *packet
     pkt_info.ack_num = ntohl(tcp_header->th_ack);
     pkt_info.win_size = ntohs(tcp_header->th_win);
     strcpy(pkt_info.protocol, "TCP");
-    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "%d -> %d [%c%c%c] Seq=%u - Ack=%u", src_port,dst_port,(tcp_header->th_flags & TH_SYN ? 'S': '-'),(tcp_header->th_flags & TH_ACK ? 'A' : '-'),(tcp_header->th_flags & TH_URG ? 'U': '-'),pkt_info.seq_num, pkt_info.ack_num);
-   
-    //capturar al flag para mostrarla en la ventana de info
+    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "%d -> %d [%c%c%c] Seq=%u - Ack=%u", src_port, dst_port, (tcp_header->th_flags & TH_SYN ? 'S' : '-'), (tcp_header->th_flags & TH_ACK ? 'A' : '-'), (tcp_header->th_flags & TH_URG ? 'U' : '-'), pkt_info.seq_num, pkt_info.ack_num);
+
+    // capturar al flag para mostrarla en la ventana de info
     pkt_info.flags[0] = '\0';
 
     if (tcp_header->th_flags & TH_SYN)
@@ -506,9 +527,9 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,const u_char *packet
     src_port = ntohs(udp_header->uh_sport);
     dst_port = ntohs(udp_header->uh_dport);
     strcpy(pkt_info.protocol, "UDP");
-    pkt_info.payload = ntohs(udp_header->uh_ulen)-sizeof(struct udphdr);
+    pkt_info.payload = ntohs(udp_header->uh_ulen) - sizeof(struct udphdr);
     pkt_info.check = ntohs(udp_header->check);
-    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "%d -> %d Len =  %u", src_port, dst_port,pkt_info.payload);
+    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "%d -> %d Len =  %u", src_port, dst_port, pkt_info.payload);
     break;
   case IPPROTO_ICMP:
     if (transport_len < sizeof(struct icmp))
@@ -524,7 +545,7 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,const u_char *packet
     pkt_info.id = ntohs(icmp_header->icmp_hun.ih_idseq.icd_id);
     pkt_info.seq_num = ntohs(icmp_header->icmp_hun.ih_idseq.icd_seq);
     strcpy(pkt_info.protocol, "ICMP");
-    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "code = %d type = %d [%s] ID = 0x%04x Seq = %u", pkt_info.code, pkt_info.type,(pkt_info.type == 8 ? "reguest":"reply"),pkt_info.id,pkt_info.seq_num);
+    snprintf(pkt_info.info, INFO_BUFFER_SIZE, "code = %d type = %d [%s] ID = 0x%04x Seq = %u", pkt_info.code, pkt_info.type, (pkt_info.type == 8 ? "reguest" : "reply"), pkt_info.id, pkt_info.seq_num);
     break;
 
   default:
@@ -551,14 +572,14 @@ void call_me(u_char *user, const struct pcap_pkthdr *pkthdr,const u_char *packet
 //-------------------------------------------------------------------------------------------------------------------//
 void *capture_thread(void *arg)
 {
-  pcap_t *handle = (pcap_t *)arg;
+  handle = (pcap_t *)arg; //la hice global, si algo truena checar aca
   pcap_loop(handle, -1, call_me, NULL);
   return NULL;
 }
 //-------------------------------------------------------------------------------------------------------------------//
-void DrawPanel(Rectangle r) 
-{ 
-  DrawRectangleLinesEx(r, 1, GREEN); 
+void DrawPanel(Rectangle r)
+{
+  DrawRectangleLinesEx(r, 1, GREEN);
 }
 //-------------------------------------------------------------------------------------------------------------------//
 void ClampScroll(float *scroll, int items, float itemHeight, float panelHeight)
@@ -622,7 +643,7 @@ void draw_packet_list()
 void draw_info_panel()
 {
   DrawPanel(Packet_info);
-  BeginScissorMode(Packet_info.x, Packet_info.y, Packet_info.width,Packet_info.height);
+  BeginScissorMode(Packet_info.x, Packet_info.y, Packet_info.width, Packet_info.height);
 
   if (selected_index >= 0 && selected_index < pkt_buffer.count)
   {
@@ -632,6 +653,9 @@ void draw_info_panel()
     int y = Packet_info.y + 10 + scroll_info;
 
     snprintf(buffer, sizeof(buffer), "Packet %d", pkt->no);
+    DrawText(buffer, x, y, 20, GREEN);
+    y += 24;
+    snprintf(buffer, sizeof(buffer), "Encapsulation:  %s", pkt->encap);
     DrawText(buffer, x, y, 20, GREEN);
     y += 24;
     snprintf(buffer, sizeof(buffer), "IP ID:   %d", pkt->id);
@@ -661,14 +685,14 @@ void draw_info_panel()
     snprintf(buffer, sizeof(buffer), "TTL:  %d", pkt->ttl);
     DrawText(buffer, x, y, 20, GREEN);
     y += 24;
-    snprintf(buffer, sizeof(buffer), "TOS:  0x%x",pkt->tos);
+    snprintf(buffer, sizeof(buffer), "TOS:  0x%x", pkt->tos);
     DrawText(buffer, x, y, 20, GREEN);
     y += 24;
     snprintf(buffer, sizeof(buffer), "Raw:  %d bytes", pkt->raw_len);
     DrawText(buffer, x, y, 20, GREEN);
     y += 24;
 
-    if (strcmp(pkt->protocol,"TCP") == 0)
+    if (strcmp(pkt->protocol, "TCP") == 0)
     {
       snprintf(buffer, sizeof(buffer), "Flags:  %s", pkt->flags);
       DrawText(buffer, x, y, 20, GREEN);
@@ -684,7 +708,7 @@ void draw_info_panel()
       y += 24;
     }
 
-    if (strcmp(pkt->protocol,"UDP") == 0)
+    if (strcmp(pkt->protocol, "UDP") == 0)
     {
       snprintf(buffer, sizeof(buffer), "Payload:  %u", pkt->payload);
       DrawText(buffer, x, y, 20, GREEN);
@@ -700,8 +724,8 @@ void draw_info_panel()
       DrawText(buffer, x, y, 20, GREEN);
       y += 24;
     }
-    
-    if (strcmp(pkt->protocol,"ICMP") == 0)
+
+    if (strcmp(pkt->protocol, "ICMP") == 0)
     {
       if (pkt->type == 8)
       {
@@ -714,9 +738,6 @@ void draw_info_panel()
       DrawText(buffer, x, y, 20, GREEN);
       y += 24;
       snprintf(buffer, sizeof(buffer), "Code:  %d", pkt->code);
-      DrawText(buffer, x, y, 20, GREEN);
-      y += 24;
-      snprintf(buffer, sizeof(buffer), "Payload:  %u", pkt->payload);
       DrawText(buffer, x, y, 20, GREEN);
       y += 24;
     }
@@ -958,7 +979,7 @@ int count_filtered()
 void draw_titles()
 {
   const char *titles[] = {"No", "TIME", "SOURCE", "DESTINATION", "PROTOCOL", "LENGTH", "INFO"};
-  int col_x[] = {20, 80, 295, 570, 845, 1120, 1350};//1395
+  int col_x[] = {20, 80, 295, 570, 845, 1120, 1350}; // 1395
 
   for (int i = 0; i < 7; i++)
   {
@@ -966,124 +987,146 @@ void draw_titles()
   }
 }
 //-------------------------------------------------------------------------------------------------------------------//
-void guardarArchivo(){
+void guardarArchivo()
+{
 
-    time_t now = time(NULL);
+  time_t now = time(NULL);
   struct tm tm_info;
   localtime_r(&now, &tm_info);
 
   char fname[256];
   snprintf(fname, sizeof(fname), "Captura de paquetes_%04d-%02d-%02d_%02d-%02d-%02d.csv", tm_info.tm_year + 1900, tm_info.tm_mon + 1, tm_info.tm_mday, tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec);
-  FILE *archivo = fopen(fname,"w");
-  if(archivo ==NULL){
+  FILE *archivo = fopen(fname, "w");
+  if (archivo == NULL)
+  {
     printf("Hubo un error al abrir el archivo");
     return;
   }
-  //columnas
-fprintf(archivo, "no;id;time;lenght;srcip;destip;ttl;tos;protocol;info;rawLength;raw\n"); 
- for (int i= 0; i<pkt_buffer.count;i++){
-   packet_info p = pkt_buffer.packets[i];
- fprintf(archivo, "%d ;%d ;%.6f;%d; %s ; %s ;%d;%d; %s;%s ; %d ; ",
-    p.no,          
-    p.id,
-    p.time,
-    p.len,
-    p.src_ip,
-    p.dst_ip,
-    p.ttl,
-    p.tos,
-    p.protocol,
-    p.info,
-    p.raw_len
-    );
-    for (int j = 0; j < p.raw_len; j++) {
+  // columnas
+  fprintf(archivo, "no;id;time;lenght;srcip;destip;ttl;tos;protocol;info;rawLength;raw\n");
+  for (int i = 0; i < pkt_buffer.count; i++)
+  {
+    packet_info p = pkt_buffer.packets[i];
+    fprintf(archivo, "%d ;%d ;%.6f;%d; %s ; %s ;%d;%d; %s;%s ; %d ; ",
+            p.no,
+            p.id,
+            p.time,
+            p.len,
+            p.src_ip,
+            p.dst_ip,
+            p.ttl,
+            p.tos,
+            p.protocol,
+            p.info,
+            p.raw_len);
+    for (int j = 0; j < p.raw_len; j++)
+    {
       fprintf(archivo, "%02x", p.raw[j]);
     }
     fprintf(archivo, "\n");
-
   }
-  
+
   fclose(archivo);
 }
 
-DeviceList get_available_devices(void) {
-    DeviceList list = { .count = 0 };
-    char errbuf[PCAP_ERRBUF_SIZE];
-    pcap_if_t *alldevs, *d;
+DeviceList get_available_devices(void)
+{
+  DeviceList list = {.count = 0};
+  char errbuf[PCAP_ERRBUF_SIZE];
+  pcap_if_t *alldevs, *d;
 
-    if (pcap_findalldevs(&alldevs, errbuf) != -1) {
-        for (d = alldevs; d != NULL && list.count < MAX_DEVICES; d = d->next) {
-            strncpy(list.names[list.count], d->name, 63);
-            list.names[list.count][63] = '\0'; // Ensure null-termination
-            list.count++;
-        }
-        pcap_freealldevs(alldevs);
-    } else {
-        printf("Error running pcap_findalldevs: %s\n", errbuf);
+  if (pcap_findalldevs(&alldevs, errbuf) != -1)
+  {
+    for (d = alldevs; d != NULL && list.count < MAX_DEVICES; d = d->next)
+    {
+      strncpy(list.names[list.count], d->name, 63);
+      list.names[list.count][63] = '\0'; // ensure null-termination
+      list.count++;
     }
-    return list;
+    pcap_freealldevs(alldevs);
+  }
+  else
+  {
+    printf("Error running pcap_findalldevs: %s\n", errbuf);
+  }
+  return list;
 }
+//-------------------------------------------------------------------------------------------------------------------//
+void start_capture_session(pcap_t **capdev, pthread_t *thread_id, const char *device_name)
+{
+  char error_buffer[PCAP_ERRBUF_SIZE];
 
-void start_capture_session(pcap_t **capdev, pthread_t *thread_id, const char *device_name) {
-    char error_buffer[PCAP_ERRBUF_SIZE];
+  *capdev = pcap_open_live(device_name, BUFSIZ, 0, 100, error_buffer); // el -1 lleva el consumo del procesador a 100%
+  if (*capdev == NULL)
+  {
+    printf("ERR: pcap_open_live() failed for %s: %s\n", device_name, error_buffer);
+    exit(1);
+  }
 
-    *capdev = pcap_open_live(device_name, BUFSIZ, 0, 100, error_buffer);
-    if (*capdev == NULL) {
-        printf("ERR: pcap_open_live() failed for %s: %s\n", device_name, error_buffer);
-        exit(1);
-    }
+  // movido aqui
+  int link_hdr_type = pcap_datalink(*capdev);
+  switch (link_hdr_type)
+  {
+  case DLT_NULL:
+    link_hdr_length = 4;
+    break;
+  case DLT_EN10MB:
+    link_hdr_length = 14;
+    break;
+  default:
+    link_hdr_length = 0;
+  }
 
-    //movido aqui
-    int link_hdr_type = pcap_datalink(*capdev);
-    switch (link_hdr_type) {
-        case DLT_NULL:    link_hdr_length = 4;  break;
-        case DLT_EN10MB:  link_hdr_length = 14; break;
-        default:          link_hdr_length = 0;
-    }
-
-    // Initialize mutex and boot background thread processing loop
-    pthread_create(thread_id, NULL, capture_thread, (void *)*capdev);
+  // Initialize mutex and boot background thread processing loop
+  pthread_create(thread_id, NULL, capture_thread, (void *)*capdev);
 }
+//-------------------------------------------------------------------------------------------------------------------//
+void draw_device_selection_screen(DeviceList list)
+{
+  DrawText("Seleccione una interfaz de red para comenzar a analizar", 50, 50, 28, GREEN);
+  DrawLine(50, 95, WIN_WIDTH - 50, 95, DARKGREEN);
 
-void draw_device_selection_screen(DeviceList list) {
-    DrawText("Seleccione una interfaz de red para comenzar a analizar", 50, 50, 28, GREEN);
-    DrawLine(50, 95, WIN_WIDTH - 50, 95, DARKGREEN);
+  int start_x = 100;
+  int start_y = 150;
+  int row_height = 45;
+  Vector2 mouse = GetMousePosition();
 
-    int start_x = 100;
-    int start_y = 150;
-    int row_height = 45;
-    Vector2 mouse = GetMousePosition();
+  for (int i = 0; i < list.count; i++)
+  {
+    Rectangle item_rec = {start_x, start_y + (i * row_height), 400, 35};
+    bool is_hovered = CheckCollisionPointRec(mouse, item_rec);
 
-    for (int i = 0; i < list.count; i++) {
-        Rectangle item_rec = { start_x, start_y + (i * row_height), 400, 35 };
-        bool is_hovered = CheckCollisionPointRec(mouse, item_rec);
-        
-        // Highlight row box backgrounds dynamically
-        Color bg_color = is_hovered ? (Color){30, 80, 30, 255} : (Color){15, 15, 15, 255};
-        Color border_color = is_hovered ? GREEN : DARKGREEN;
-        Color text_color = is_hovered ? YELLOW : GREEN;
+    // Highlight row box backgrounds dynamically
+    Color bg_color = is_hovered ? (Color){30, 80, 30, 255} : (Color){15, 15, 15, 255};
+    Color border_color = is_hovered ? GREEN : DARKGREEN;
+    Color text_color = is_hovered ? YELLOW : GREEN;
 
-        DrawRectangleRec(item_rec, bg_color);
-        DrawRectangleLinesEx(item_rec, 1, border_color);
-        DrawText(list.names[i], item_rec.x + 15, item_rec.y + 7, 20, text_color);
-    }
+    DrawRectangleRec(item_rec, bg_color);
+    DrawRectangleLinesEx(item_rec, 1, border_color);
+    DrawText(list.names[i], item_rec.x + 15, item_rec.y + 7, 20, text_color);
+  }
 }
+//-------------------------------------------------------------------------------------------------------------------//
+void handle_device_selection_clicks(Vector2 mouse, DeviceList list, pcap_t **capdev, pthread_t *thread_id)
+{
+  int start_x = 100;
+  int start_y = 150;
+  int row_height = 45;
 
-void handle_device_selection_clicks(Vector2 mouse, DeviceList list, pcap_t **capdev, pthread_t *thread_id) {
-    int start_x = 100;
-    int start_y = 150;
-    int row_height = 45;
+  for (int i = 0; i < list.count; i++)
+  {
+    Rectangle item_rec = {start_x, start_y + (i * row_height), 400, 35};
 
-    for (int i = 0; i < list.count; i++) {
-        Rectangle item_rec = { start_x, start_y + (i * row_height), 400, 35 };
-        
-        if (CheckCollisionPointRec(mouse, item_rec)) {
-            strncpy(selected_device_name, list.names[i], sizeof(selected_device_name) - 1);
-            start_capture_session(capdev, thread_id, selected_device_name);
-            
-            // Cambia de estado
-            current_state = STATE_SNIFFING;
-            return;
-        }
+    if (CheckCollisionPointRec(mouse, item_rec))
+    {
+      strncpy(selected_device_name, list.names[i], sizeof(selected_device_name) - 1);
+      start_capture_session(capdev, thread_id, selected_device_name);
+
+      // Cambia de estado
+      current_state = STATE_SNIFFING;
+      return;
     }
+  }
 }
+//-------------------------------------------------------------------------------------------------------------------//
+//-------------------------------------------------------------------------------------------------------------------//
