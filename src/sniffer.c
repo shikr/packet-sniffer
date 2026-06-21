@@ -131,6 +131,14 @@ gpointer capture_thread(gpointer user_data) {
 
 void app_sniffer_start(AppSniffer *self) {
   g_return_if_fail(APP_IS_SNIFFER(self));
+
+  g_ptr_array_remove_range(self->packets, 0, self->packets->len);
+
+  self->first_ts.tv_sec = 0;
+
+  while (g_async_queue_try_pop(self->queue))
+    ;
+
   if (!self->thread && !self->handle) {
     self->thread = g_thread_new("capture_thread", capture_thread, self);
   }
@@ -147,13 +155,6 @@ void app_sniffer_stop(AppSniffer *self) {
     g_thread_unref(self->thread);
     self->thread = NULL;
   }
-
-  g_ptr_array_remove_range(self->packets, 0, self->packets->len);
-
-  self->first_ts.tv_sec = 0;
-
-  while (g_async_queue_try_pop(self->queue))
-    ;
 }
 
 PacketInfo *app_sniffer_get_packet(AppSniffer *self, guint index) {

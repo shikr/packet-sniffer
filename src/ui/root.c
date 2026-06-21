@@ -24,7 +24,7 @@ GtkWidget *root_render() {
   app_state_start_sniffer(state);
 
   GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
-  GtkWidget *toolbar = toolbar_render();
+  GtkWidget *toolbar = toolbar_render(state);
   GtkWidget *vpane = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
   GtkWidget *table = table_render(state);
   GtkWidget *hpane = details_render(state);

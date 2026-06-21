@@ -102,6 +102,7 @@ void app_state_start_sniffer(AppState *self) {
   gtk_list_store_clear(self->store);
   app_sniffer_start(self->sniffer);
   self->timeout_id = app_sniffer_start_timer(self->sniffer);
+  gtk_list_store_clear(self->store);
 }
 
 void app_state_stop_sniffer(AppState *self) {
