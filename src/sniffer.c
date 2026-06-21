@@ -1,12 +1,12 @@
 #include "sniffer.h"
 #include "packet_info.h"
+#include <capture.h>
 #include <glib.h>
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
 #include <pcap.h>
-#include <string.h>
 
 struct _AppSniffer {
   GObject parent;
@@ -76,122 +76,15 @@ void app_sniffer_add_packet(AppSniffer *self, PacketInfo *pkt_info) {
   g_signal_emit(self, signals[SIG_CAPTURED], 0, index);
 }
 
-void capture_handler(u_char *user, const struct pcap_pkthdr *pkthdr,
-                     const u_char *packetd_ptr) {
-  AppSniffer *self = (AppSniffer *)user;
-  int link_hdr_length = 14; // Assuming Ethernet
+gdouble app_sniffer_get_relative_time(AppSniffer *self,
+                                      const struct timeval *ts) {
+  gint64 ts_us = (gint64)ts->tv_sec * G_GINT64_CONSTANT(1000000) + ts->tv_usec;
+  gint64 first_us = (gint64)self->first_ts.tv_sec * G_GINT64_CONSTANT(1000000) +
+                    self->first_ts.tv_usec;
+  return (ts_us - first_us) / 1e6;
+}
 
-  const u_char *pkt_start = packetd_ptr;
-  if (pkthdr->caplen <
-      (unsigned int)(link_hdr_length + (int)sizeof(struct ip))) {
-    return;
-  }
-
-  PacketInfo *pkt_info = g_new0(PacketInfo, 1);
-
-  if (!self->first_ts.tv_sec) {
-    self->first_ts = pkthdr->ts;
-  }
-
-  pkt_info->time = (pkthdr->ts.tv_sec - self->first_ts.tv_sec) +
-                   (pkthdr->ts.tv_usec - self->first_ts.tv_usec) / 1000000.0f;
-
-  packetd_ptr += link_hdr_length;
-  struct ip *ip_hdr = (struct ip *)packetd_ptr;
-
-  pkt_info->no = self->packets->len + 1;
-  pkt_info->src_ip = g_strdup(inet_ntoa(ip_hdr->ip_src));
-  pkt_info->dst_ip = g_strdup(inet_ntoa(ip_hdr->ip_dst));
-  pkt_info->id = ntohs(ip_hdr->ip_id);
-  pkt_info->ttl = ip_hdr->ip_ttl;
-  pkt_info->tos = ip_hdr->ip_tos;
-  pkt_info->len = ntohs(ip_hdr->ip_len);
-  pkt_info->protocol = g_strdup("OTHER");
-  pkt_info->info = g_strdup("");
-  pkt_info->raw_len = pkthdr->caplen;
-  pkt_info->raw = g_malloc(pkt_info->raw_len + 1);
-  memcpy(pkt_info->raw, pkt_start, pkt_info->raw_len);
-
-  int packet_hlen = ip_hdr->ip_hl * 4;
-  if (packet_hlen < 20 ||
-      pkthdr->caplen < (unsigned int)(link_hdr_length + packet_hlen)) {
-    packet_info_free(pkt_info);
-    return;
-  }
-
-  packetd_ptr += packet_hlen;
-  int protocol_type = ip_hdr->ip_p;
-  unsigned int transport_len = pkthdr->caplen - link_hdr_length - packet_hlen;
-
-  struct tcphdr *tcp_header;
-  struct udphdr *udp_header;
-  struct icmp *icmp_header;
-  int src_port, dst_port;
-
-  // printf("************************************"
-  //        "**************************************\n");
-  // printf("ID: %d | SRC: %s | DST: %s | TOS: 0x%x | TTL: %d\n", pkt_info.id,
-  //        pkt_info.src_ip, pkt_info.dst_ip, pkt_info.tos, pkt_info.ttl);
-
-  switch (protocol_type) {
-  case IPPROTO_TCP:
-    if (transport_len < sizeof(struct tcphdr)) {
-      pkt_info->protocol = g_strdup("TCP");
-      pkt_info->info = g_strdup("TRUNCATED");
-      break;
-    }
-    tcp_header = (struct tcphdr *)packetd_ptr;
-    src_port = ntohs(tcp_header->th_sport);
-    dst_port = ntohs(tcp_header->th_dport);
-    pkt_info->protocol = g_strdup("TCP");
-    char flags[8];
-    snprintf(flags, sizeof(flags), "%c%c%c",
-             (tcp_header->th_flags & TH_SYN ? 'S' : '-'),
-             (tcp_header->th_flags & TH_ACK ? 'A' : '-'),
-             (tcp_header->th_flags & TH_URG ? 'U' : '-'));
-    asprintf(&pkt_info->info, "%d -> %d [%s]", src_port, dst_port, flags);
-    // printf("PROTO: TCP | FLAGS: %c/%c/%c | SPORT: %d | DPORT: %d |\n",
-    //        (tcp_header->th_flags & TH_SYN ? 'S' : '-'),
-    //        (tcp_header->th_flags & TH_ACK ? 'A' : '-'),
-    //        (tcp_header->th_flags & TH_URG ? 'U' : '-'), src_port, dst_port);
-    break;
-  case IPPROTO_UDP: {
-    if (transport_len < sizeof(struct udphdr)) {
-      pkt_info->protocol = g_strdup("UDP");
-      pkt_info->info = g_strdup("TRUNCATED");
-      break;
-    }
-    udp_header = (struct udphdr *)packetd_ptr;
-    src_port = ntohs(udp_header->uh_sport);
-    dst_port = ntohs(udp_header->uh_dport);
-    pkt_info->protocol = g_strdup("UDP");
-    asprintf(&pkt_info->info, "%d -> %d", src_port, dst_port);
-    // printf("PROTO: UDP | SPORT: %d | DPORT: %d |\n", src_port, dst_port);
-    break;
-  }
-  case IPPROTO_ICMP:
-    if (transport_len < sizeof(struct icmp)) {
-      pkt_info->protocol = g_strdup("ICMP");
-      pkt_info->info = g_strdup("TRUNCATED");
-      break;
-    }
-    icmp_header = (struct icmp *)packetd_ptr;
-    // int icmp_type = icmp_header->icmp_type;
-    // int icmp_type_code = icmp_header->icmp_code;
-    pkt_info->protocol = g_strdup("ICMP");
-    asprintf(&pkt_info->info, "type=%d code=%d", icmp_header->icmp_type,
-             icmp_header->icmp_code);
-    // printf("PROTO: ICMP | TYPE: %d | CODE: %d |\n", icmp_type,
-    // icmp_type_code);
-    break;
-
-  default:
-    pkt_info->protocol = g_strdup("OTHER");
-    pkt_info->info = g_strdup("");
-    break;
-  }
-
-  // save
+void app_sniffer_queue_packet(AppSniffer *self, PacketInfo *pkt_info) {
   g_async_queue_push(self->queue, pkt_info);
 }
 

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "packet_info.h"
 #include <glib-object.h>
 #include <gtk/gtk.h>
 

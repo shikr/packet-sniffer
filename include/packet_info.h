@@ -16,18 +16,18 @@ enum PacketColumns {
 };
 
 typedef struct {
-  int no;
   int id;
-  float time;
-  int len;
-  char *src_ip;
-  char *dst_ip;
-  int ttl;
-  int tos;
+  gdouble time;
+  char *src;
+  char *dst;
   char *protocol;
+  guint len;
   char *info;
-  int raw_len;
-  u_char *raw;
+
+  GPtrArray *layers;
+
+  guint8 *raw;
+  guint raw_len;
 } PacketInfo;
 
 void packet_info_free(gpointer data);

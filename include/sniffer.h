@@ -14,6 +14,10 @@ void app_sniffer_start(AppSniffer *self);
 void app_sniffer_stop(AppSniffer *self);
 
 PacketInfo *app_sniffer_get_packet(AppSniffer *self, guint index);
+gdouble app_sniffer_get_relative_time(AppSniffer *self,
+                                      const struct timeval *ts);
+
+void app_sniffer_queue_packet(AppSniffer *self, PacketInfo *pkt_info);
 
 guint app_sniffer_start_timer(AppSniffer *self);
 

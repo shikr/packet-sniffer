@@ -78,18 +78,18 @@ void add_packet_info(AppSniffer *self, guint i, gpointer user_data) {
   GtkTreeIter iter;
 
   gtk_list_store_append(state->store, &iter);
-  gtk_list_store_set(state->store, &iter, COL_NO, pkt->no, COL_TIME, pkt->time,
-                     COL_SOURCE, pkt->src_ip, COL_DEST, pkt->dst_ip,
-                     COL_PROTOCOL, pkt->protocol, COL_LEN, pkt->len, COL_INFO,
-                     pkt->info, COL_INDEX, i, -1);
+  gtk_list_store_set(state->store, &iter, COL_NO, pkt->id, COL_TIME, pkt->time,
+                     COL_SOURCE, pkt->src, COL_DEST, pkt->dst, COL_PROTOCOL,
+                     pkt->protocol, COL_LEN, pkt->len, COL_INFO, pkt->info,
+                     COL_INDEX, i, -1);
 }
 
 AppState *app_state_new(char *device, char *filter) {
   AppState *self = g_object_new(APP_TYPE_STATE, NULL);
   self->sniffer = app_sniffer_new(device, filter);
-  self->store = gtk_list_store_new(NUM_COLS, G_TYPE_INT, G_TYPE_FLOAT,
+  self->store = gtk_list_store_new(NUM_COLS, G_TYPE_INT, G_TYPE_DOUBLE,
                                    G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING,
-                                   G_TYPE_INT, G_TYPE_STRING, G_TYPE_UINT);
+                                   G_TYPE_UINT, G_TYPE_STRING, G_TYPE_UINT);
 
   g_signal_connect(self->sniffer, "captured", G_CALLBACK(add_packet_info),
                    self);
