@@ -3,4 +3,4 @@
 #include "state.h"
 #include <gtk/gtk.h>
 
-GtkWidget *root_render(AppState *state);
+GtkWidget *home_render(AppState *state);

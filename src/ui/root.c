@@ -18,11 +18,7 @@ void on_paned_realize(GtkWidget *paned, gpointer data) {
   gtk_paned_set_position(GTK_PANED(paned), total_size / 2);
 }
 
-GtkWidget *root_render() {
-  AppState *state = app_state_new("wlan0", NULL);
-
-  app_state_start_sniffer(state);
-
+GtkWidget *root_render(AppState *state) {
   GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
   GtkWidget *toolbar = toolbar_render(state);
   GtkWidget *vpane = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
@@ -32,8 +28,8 @@ GtkWidget *root_render() {
   gtk_paned_add1(GTK_PANED(vpane), table);
   gtk_paned_add2(GTK_PANED(vpane), hpane);
 
-  g_signal_connect(vpane, "realize", G_CALLBACK(on_paned_realize), NULL);
-  g_signal_connect(hpane, "realize", G_CALLBACK(on_paned_realize), NULL);
+  // g_signal_connect(vpane, "realize", G_CALLBACK(on_paned_realize), NULL);
+  // g_signal_connect(hpane, "realize", G_CALLBACK(on_paned_realize), NULL);
 
   gtk_box_pack_start(GTK_BOX(vbox), toolbar, FALSE, FALSE, 0);
   gtk_box_pack_start(GTK_BOX(vbox), vpane, TRUE, TRUE, 0);

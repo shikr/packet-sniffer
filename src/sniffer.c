@@ -16,8 +16,6 @@ struct _AppSniffer {
   GMutex mutex;
   GThread *thread;
   struct timeval first_ts;
-  char *device;
-  char *filter;
 };
 
 enum { SIG_CAPTURED, N_SIGNALS };
@@ -47,8 +45,6 @@ static void app_sniffer_finalize(GObject *object) {
     self->thread = NULL;
   }
   g_mutex_clear(&self->mutex);
-  g_free(self->device);
-  g_free(self->filter);
   G_OBJECT_CLASS(app_sniffer_parent_class)->finalize(object);
 }
 
@@ -60,10 +56,8 @@ static void app_sniffer_class_init(AppSnifferClass *klass) {
                    NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_UINT);
 }
 
-AppSniffer *app_sniffer_new(char *device, char *filter) {
+AppSniffer *app_sniffer_new() {
   AppSniffer *self = g_object_new(APP_TYPE_SNIFFER, NULL);
-  self->device = g_strdup(device);
-  self->filter = g_strdup(filter);
   return self;
 }
 
@@ -88,34 +82,41 @@ void app_sniffer_queue_packet(AppSniffer *self, PacketInfo *pkt_info) {
   g_async_queue_push(self->queue, pkt_info);
 }
 
-gpointer capture_thread(gpointer user_data) {
-  AppSniffer *self = (AppSniffer *)user_data;
+typedef struct {
+  AppSniffer *sniffer;
+  char *device;
+  char *filter;
+} CaptureThreadData;
+
+static gpointer capture_thread(gpointer user_data) {
+  CaptureThreadData *data = user_data;
+  AppSniffer *self = data->sniffer;
   char errbuf[PCAP_ERRBUF_SIZE];
 
-  self->handle = pcap_open_live(self->device, BUFSIZ, 1, 100, errbuf);
+  self->handle = pcap_open_live(data->device, BUFSIZ, 1, 100, errbuf);
   if (!self->handle) {
-    g_warning("Could not open device %s: %s", self->device, errbuf);
+    g_warning("Could not open device %s: %s", data->device, errbuf);
     g_object_unref(self);
     return NULL;
   }
   struct bpf_program fp;
 
   if (pcap_datalink(self->handle) != DLT_EN10MB) {
-    g_warning("Device %s does not support Ethernet headers", self->device);
+    g_warning("Device %s does not support Ethernet headers", data->device);
     g_object_unref(self);
     return NULL;
   }
 
-  if (self->filter) {
-    if (pcap_compile(self->handle, &fp, self->filter, 0,
+  if (data->filter && data->filter[0] != '\0') {
+    if (pcap_compile(self->handle, &fp, data->filter, 0,
                      PCAP_NETMASK_UNKNOWN) == -1) {
-      g_warning("Could not parse filter %s: %s", self->filter,
+      g_warning("Could not parse filter %s: %s", data->filter,
                 pcap_geterr(self->handle));
       g_object_unref(self);
       return NULL;
     }
     if (pcap_setfilter(self->handle, &fp) == -1) {
-      g_warning("Could not install filter %s: %s", self->filter,
+      g_warning("Could not install filter %s: %s", data->filter,
                 pcap_geterr(self->handle));
       g_object_unref(self);
       return NULL;
@@ -126,10 +127,14 @@ gpointer capture_thread(gpointer user_data) {
 
   pcap_close(self->handle);
   self->handle = NULL;
+  g_free(data->device);
+  g_free(data->filter);
+  g_free(data);
   return NULL;
 }
 
-void app_sniffer_start(AppSniffer *self) {
+void app_sniffer_start(AppSniffer *self, const char *device,
+                       const char *filter) {
   g_return_if_fail(APP_IS_SNIFFER(self));
 
   g_ptr_array_remove_range(self->packets, 0, self->packets->len);
@@ -140,7 +145,11 @@ void app_sniffer_start(AppSniffer *self) {
     ;
 
   if (!self->thread && !self->handle) {
-    self->thread = g_thread_new("capture_thread", capture_thread, self);
+    CaptureThreadData *data = g_new(CaptureThreadData, 1);
+    data->sniffer = self;
+    data->device = g_strdup(device);
+    data->filter = g_strdup(filter);
+    self->thread = g_thread_new("capture_thread", capture_thread, data);
   }
 }
 

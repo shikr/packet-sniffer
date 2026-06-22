@@ -1,7 +1,9 @@
 #include "state.h"
 #include "packet_info.h"
 #include "sniffer.h"
+#include <glib.h>
 #include <gtk/gtk.h>
+#include <pcap.h>
 #include <stdio.h>
 
 struct _AppState {
@@ -12,6 +14,9 @@ struct _AppState {
   GtkListStore *store;
   AppSniffer *sniffer;
   GtkEntryBuffer *filter_buffer;
+  GtkEntryBuffer *capture_filter_buffer;
+  GtkWidget *combo_device;
+  GtkWidget *stack;
 };
 
 enum { PROP_0, PROP_SELECTED, PROP_STARTED, N_PROPS };
@@ -28,6 +33,9 @@ static void app_state_init(AppState *self) {
   self->store = NULL;
   self->sniffer = NULL;
   self->filter_buffer = gtk_entry_buffer_new(NULL, -1);
+  self->capture_filter_buffer = gtk_entry_buffer_new(NULL, -1);
+  self->combo_device = gtk_combo_box_text_new();
+  self->stack = gtk_stack_new();
 }
 
 static void app_state_finalize(GObject *object) {
@@ -111,9 +119,42 @@ static void add_packet_info(AppSniffer *self, guint i, gpointer user_data) {
                      COL_INDEX, i, -1);
 }
 
-AppState *app_state_new(char *device, char *filter) {
+static gboolean is_ethernet(pcap_if_t *dev) {
+  for (pcap_addr_t *a = dev->addresses; a; a = a->next) {
+    if (a->addr && a->addr->sa_family == AF_PACKET) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+static void populate_interfaces(GtkComboBoxText *combo) {
+  pcap_if_t *alldevs;
+  char errbuf[PCAP_ERRBUF_SIZE];
+
+  if (pcap_findalldevs(&alldevs, errbuf) == -1) {
+    g_printerr("Error finding devices: %s\n", errbuf);
+    return;
+  }
+
+  for (pcap_if_t *d = alldevs; d; d = d->next) {
+    if (!is_ethernet(d)) {
+      continue;
+    }
+    gtk_combo_box_text_append(combo, d->name, d->name);
+  }
+
+  pcap_freealldevs(alldevs);
+
+  gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
+}
+
+AppState *app_state_new() {
   AppState *self = g_object_new(APP_TYPE_STATE, NULL);
-  self->sniffer = app_sniffer_new(device, filter);
+
+  populate_interfaces(GTK_COMBO_BOX_TEXT(self->combo_device));
+
+  self->sniffer = app_sniffer_new();
   self->store = gtk_list_store_new(NUM_COLS, G_TYPE_INT, G_TYPE_DOUBLE,
                                    G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING,
                                    G_TYPE_UINT, G_TYPE_STRING, G_TYPE_UINT);
@@ -127,7 +168,10 @@ AppState *app_state_new(char *device, char *filter) {
 void app_state_start_sniffer(AppState *self) {
   g_return_if_fail(APP_IS_STATE(self));
   gtk_list_store_clear(self->store);
-  app_sniffer_start(self->sniffer);
+  app_sniffer_start(
+      self->sniffer,
+      gtk_combo_box_get_active_id(GTK_COMBO_BOX(self->combo_device)),
+      gtk_entry_buffer_get_text(self->capture_filter_buffer));
   self->timeout_id = app_sniffer_start_timer(self->sniffer);
   g_object_set(self, "started", TRUE, NULL);
   gtk_list_store_clear(self->store);
@@ -174,6 +218,11 @@ void app_state_save_capture(AppState *self, const char *filename) {
   g_print("Saving capture to: %s\n", filename);
 }
 
+void app_state_show_sniffer(AppState *self) {
+  g_return_if_fail(APP_IS_STATE(self));
+  gtk_stack_set_visible_child_name(GTK_STACK(self->stack), "sniffer");
+}
+
 gboolean app_state_is_sniffer_started(AppState *self) {
   g_return_val_if_fail(APP_IS_STATE(self), FALSE);
   return self->started;
@@ -215,4 +264,20 @@ GtkWidget *app_state_create_filter_entry(AppState *self) {
   g_return_val_if_fail(APP_IS_STATE(self), NULL);
   GtkWidget *entry = gtk_entry_new_with_buffer(self->filter_buffer);
   return entry;
+}
+
+GtkWidget *app_state_create_capture_filter_entry(AppState *self) {
+  g_return_val_if_fail(APP_IS_STATE(self), NULL);
+  GtkWidget *entry = gtk_entry_new_with_buffer(self->capture_filter_buffer);
+  return entry;
+}
+
+GtkWidget *app_state_get_device_combo(AppState *self) {
+  g_return_val_if_fail(APP_IS_STATE(self), NULL);
+  return self->combo_device;
+}
+
+GtkWidget *app_state_get_stack(AppState *self) {
+  g_return_val_if_fail(APP_IS_STATE(self), NULL);
+  return self->stack;
 }
