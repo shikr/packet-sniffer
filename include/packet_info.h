@@ -31,3 +31,5 @@ typedef struct {
 } PacketInfo;
 
 void packet_info_free(gpointer data);
+
+gboolean packet_info_match_filter(PacketInfo *info, const gchar *filter);

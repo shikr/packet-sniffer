@@ -14,6 +14,7 @@ void app_sniffer_start(AppSniffer *self);
 void app_sniffer_stop(AppSniffer *self);
 
 PacketInfo *app_sniffer_get_packet(AppSniffer *self, guint index);
+guint app_sniffer_packets_len(AppSniffer *self);
 gdouble app_sniffer_get_relative_time(AppSniffer *self,
                                       const struct timeval *ts);
 

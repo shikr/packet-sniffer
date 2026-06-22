@@ -19,7 +19,7 @@ void on_paned_realize(GtkWidget *paned, gpointer data) {
 }
 
 GtkWidget *root_render() {
-  AppState *state = app_state_new("eth0", NULL);
+  AppState *state = app_state_new("wlan0", NULL);
 
   app_state_start_sniffer(state);
 

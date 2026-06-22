@@ -168,6 +168,16 @@ PacketInfo *app_sniffer_get_packet(AppSniffer *self, guint index) {
   return pkt_info;
 }
 
+guint app_sniffer_packets_len(AppSniffer *self) {
+  g_return_val_if_fail(APP_IS_SNIFFER(self), 0);
+
+  g_mutex_lock(&self->mutex);
+  guint len = self->packets->len;
+  g_mutex_unlock(&self->mutex);
+
+  return len;
+}
+
 gboolean update_packets_from_queue(gpointer user_data) {
   AppSniffer *self = user_data;
   PacketInfo *pkt_info;

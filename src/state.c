@@ -6,9 +6,11 @@
 struct _AppState {
   GObject parent;
   PacketInfo *selected;
+  gboolean started;
   guint timeout_id;
   GtkListStore *store;
   AppSniffer *sniffer;
+  GtkEntryBuffer *filter_buffer;
 };
 
 enum { PROP_0, PROP_SELECTED, N_PROPS };
@@ -20,9 +22,11 @@ G_DEFINE_TYPE(AppState, app_state, G_TYPE_OBJECT)
 
 static void app_state_init(AppState *self) {
   self->selected = NULL;
+  self->started = FALSE;
   self->timeout_id = 0;
   self->store = NULL;
   self->sniffer = NULL;
+  self->filter_buffer = gtk_entry_buffer_new(NULL, -1);
 }
 
 static void app_state_finalize(GObject *object) {
@@ -72,9 +76,21 @@ static void app_state_class_init(AppStateClass *klass) {
   g_object_class_install_properties(object_class, N_PROPS, properties);
 }
 
-void add_packet_info(AppSniffer *self, guint i, gpointer user_data) {
+static gboolean match_filter(PacketInfo *pkt, const gchar *filter) {
+  if (!filter || filter[0] == '\0') {
+    return TRUE;
+  }
+  return packet_info_match_filter(pkt, filter);
+}
+
+static void add_packet_info(AppSniffer *self, guint i, gpointer user_data) {
   AppState *state = user_data;
   PacketInfo *pkt = app_sniffer_get_packet(self, i);
+
+  if (!match_filter(pkt, gtk_entry_buffer_get_text(state->filter_buffer))) {
+    return;
+  }
+
   GtkTreeIter iter;
 
   gtk_list_store_append(state->store, &iter);
@@ -102,16 +118,33 @@ void app_state_start_sniffer(AppState *self) {
   gtk_list_store_clear(self->store);
   app_sniffer_start(self->sniffer);
   self->timeout_id = app_sniffer_start_timer(self->sniffer);
+  self->started = TRUE;
   gtk_list_store_clear(self->store);
 }
 
 void app_state_stop_sniffer(AppState *self) {
   g_return_if_fail(APP_IS_STATE(self));
   app_sniffer_stop(self->sniffer);
+  self->started = FALSE;
   if (self->timeout_id > 0) {
     g_source_remove(self->timeout_id);
     self->timeout_id = 0;
   }
+}
+
+void app_state_filter_sniffer(AppState *self) {
+  g_return_if_fail(APP_IS_STATE(self));
+
+  gtk_list_store_clear(self->store);
+
+  for (guint i = 0; i < app_sniffer_packets_len(self->sniffer); i++) {
+    add_packet_info(self->sniffer, i, self);
+  }
+}
+
+gboolean app_state_is_sniffer_started(AppState *self) {
+  g_return_val_if_fail(APP_IS_STATE(self), FALSE);
+  return self->started;
 }
 
 void app_state_set_selected_by_index(AppState *self, guint index) {
@@ -144,4 +177,10 @@ GtkWidget *app_state_create_table_view(AppState *self) {
   }
 
   return table;
+}
+
+GtkWidget *app_state_create_filter_entry(AppState *self) {
+  g_return_val_if_fail(APP_IS_STATE(self), NULL);
+  GtkWidget *entry = gtk_entry_new_with_buffer(self->filter_buffer);
+  return entry;
 }
