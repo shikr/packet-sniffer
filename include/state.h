@@ -12,6 +12,7 @@ AppState *app_state_new(char *device, char *filter);
 void app_state_start_sniffer(AppState *self);
 void app_state_stop_sniffer(AppState *self);
 void app_state_filter_sniffer(AppState *self);
+void app_state_save_capture(AppState *self, const char *filename);
 
 gboolean app_state_is_sniffer_started(AppState *self);
 void app_state_set_selected_by_index(AppState *self, guint index);

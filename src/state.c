@@ -2,6 +2,7 @@
 #include "packet_info.h"
 #include "sniffer.h"
 #include <gtk/gtk.h>
+#include <stdio.h>
 
 struct _AppState {
   GObject parent;
@@ -150,6 +151,27 @@ void app_state_filter_sniffer(AppState *self) {
   for (guint i = 0; i < app_sniffer_packets_len(self->sniffer); i++) {
     add_packet_info(self->sniffer, i, self);
   }
+}
+
+void app_state_save_capture(AppState *self, const char *filename) {
+  g_return_if_fail(APP_IS_STATE(self));
+  FILE *file = fopen(filename, "w");
+  if (!file) {
+    g_printerr("Failed to open file for writing: %s\n", filename);
+    return;
+  }
+  fprintf(file, "id;time;length;src;dest;protocol;info;raw_len;raw\n");
+  for (guint i = 0; i < app_sniffer_packets_len(self->sniffer); i++) {
+    PacketInfo *pkt = app_sniffer_get_packet(self->sniffer, i);
+    fprintf(file, "%d;%.6f;%u;%s;%s;%s;%s;%u;", pkt->id, pkt->time, pkt->len,
+            pkt->src, pkt->dst, pkt->protocol, pkt->info, pkt->raw_len);
+    for (guint j = 0; j < pkt->raw_len; j++) {
+      fprintf(file, "%02x", pkt->raw[j]);
+    }
+    fprintf(file, "\n");
+  }
+  fclose(file);
+  g_print("Saving capture to: %s\n", filename);
 }
 
 gboolean app_state_is_sniffer_started(AppState *self) {
