@@ -251,7 +251,7 @@ GtkWidget *app_state_create_table_view(AppState *self) {
     gtk_tree_view_column_set_resizable(c, TRUE);
     gtk_tree_view_column_set_expand(c, TRUE);
 
-    if (i == COL_INDEX)
+    if (i == COL_INDEX || i == COL_NO)
       gtk_tree_view_column_set_visible(c, FALSE);
 
     gtk_tree_view_append_column(GTK_TREE_VIEW(table), c);

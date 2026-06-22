@@ -446,6 +446,8 @@ void capture_handler(u_char *user, const struct pcap_pkthdr *pkthdr,
     return;
 
   // --- Tiempo relativo ---
+  app_sniffer_check_time(self, pkthdr->ts);
+
   gdouble time_rel = app_sniffer_get_relative_time(self, &pkthdr->ts);
 
   // --- PacketInfo ---

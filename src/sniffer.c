@@ -70,6 +70,11 @@ void app_sniffer_add_packet(AppSniffer *self, PacketInfo *pkt_info) {
   g_signal_emit(self, signals[SIG_CAPTURED], 0, index);
 }
 
+void app_sniffer_check_time(AppSniffer *self, const struct timeval ts) {
+  if (!self->first_ts.tv_sec && !self->first_ts.tv_usec)
+    self->first_ts = ts;
+}
+
 gdouble app_sniffer_get_relative_time(AppSniffer *self,
                                       const struct timeval *ts) {
   gint64 ts_us = (gint64)ts->tv_sec * G_GINT64_CONSTANT(1000000) + ts->tv_usec;
@@ -140,6 +145,7 @@ void app_sniffer_start(AppSniffer *self, const char *device,
   g_ptr_array_remove_range(self->packets, 0, self->packets->len);
 
   self->first_ts.tv_sec = 0;
+  self->first_ts.tv_usec = 0;
 
   while (g_async_queue_try_pop(self->queue))
     ;
