@@ -13,7 +13,7 @@ struct _AppState {
   GtkEntryBuffer *filter_buffer;
 };
 
-enum { PROP_0, PROP_SELECTED, N_PROPS };
+enum { PROP_0, PROP_SELECTED, PROP_STARTED, N_PROPS };
 static GParamSpec *properties[N_PROPS] = {
     NULL,
 };
@@ -44,6 +44,10 @@ static void app_state_set_property(GObject *object, guint property_id,
     self->selected = g_value_get_pointer(value);
     g_object_notify_by_pspec(object, properties[PROP_SELECTED]);
     break;
+  case PROP_STARTED:
+    self->started = g_value_get_boolean(value);
+    g_object_notify_by_pspec(object, properties[PROP_STARTED]);
+    break;
   default:
     G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
     break;
@@ -56,6 +60,9 @@ static void app_state_get_property(GObject *object, guint property_id,
   switch (property_id) {
   case PROP_SELECTED:
     g_value_set_pointer(value, self->selected);
+    break;
+  case PROP_STARTED:
+    g_value_set_boolean(value, self->started);
     break;
   default:
     G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -72,6 +79,9 @@ static void app_state_class_init(AppStateClass *klass) {
   properties[PROP_SELECTED] =
       g_param_spec_pointer("selected", "Selected Packet",
                            "Currently selected packet info", G_PARAM_READWRITE);
+  properties[PROP_STARTED] = g_param_spec_boolean(
+      "started", "Started", "Whether the sniffer is started", FALSE,
+      G_PARAM_READWRITE);
 
   g_object_class_install_properties(object_class, N_PROPS, properties);
 }
@@ -118,14 +128,14 @@ void app_state_start_sniffer(AppState *self) {
   gtk_list_store_clear(self->store);
   app_sniffer_start(self->sniffer);
   self->timeout_id = app_sniffer_start_timer(self->sniffer);
-  self->started = TRUE;
+  g_object_set(self, "started", TRUE, NULL);
   gtk_list_store_clear(self->store);
 }
 
 void app_state_stop_sniffer(AppState *self) {
   g_return_if_fail(APP_IS_STATE(self));
   app_sniffer_stop(self->sniffer);
-  self->started = FALSE;
+  g_object_set(self, "started", FALSE, NULL);
   if (self->timeout_id > 0) {
     g_source_remove(self->timeout_id);
     self->timeout_id = 0;
